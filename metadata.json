@@ -1,0 +1,6 @@
+{
+  "name": "Interactive Calendar",
+  "description": "A clean school/group calendar application with modular roles, member management, invite codes, and event administration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

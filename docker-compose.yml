@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: school_calendar_app
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # Optional SMTP Configuration for email password recovery
+      # - SMTP_HOST=smtp.gmail.com
+      # - SMTP_PORT=587
+      # - SMTP_USER=your_email@gmail.com
+      # - SMTP_PASS=your_app_password
+      # - SMTP_FROM="Classroom Calendar" <no-reply@yourdomain.com>
+    volumes:
+      # Persist SQLite database file on host system
+      - ./calendar_db.sqlite:/app/calendar_db.sqlite
