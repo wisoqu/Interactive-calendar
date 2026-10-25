@@ -1,437 +1,253 @@
 # API Contract - Interactive Calendar
 
-All APIs communicate via standard JSON payloads. In case of success, operations return structured models or indicators. In case of errors, a standard error interface is returned with descriptive messages.
+All endpoints accept and return JSON (`application/json`). Every route is mounted under both `/api/...` (used by the React SPA client) and direct root paths (`/auth/...`, `/classrooms/...`, `/health`).
 
 ---
 
 ## 1. Authentication Endpoints
 
 ### Register
-*   **Path**: `POST /auth/register`
-*   **Request Payload**:
-    ```json
-    {
-      "username": "student_jennifer",
-      "password": "SecurePassword123",
-      "email": "jennifer@school.org"
-    }
-    ```
-*   **Response Payload (201 Created)**:
-    ```json
-    {
-      "id": "usr_902341",
-      "username": "student_jennifer",
-      "email": "jennifer@school.org"
-    }
-    ```
+* **Path**: `POST /api/auth/register` (alias: `POST /auth/register`)
+* **Request Payload**:
+  ```json
+  {
+    "username": "ivan_petrov",
+    "password": "SecurePassword123",
+    "email": "ivan@school42.ru"
+  }
+  ```
+* **Response (201 Created)**:
+  ```json
+  {
+    "id": "usr_902341ab12cd34ef",
+    "username": "ivan_petrov",
+    "email": "ivan@school42.ru"
+  }
+  ```
 
 ### Login
-*   **Path**: `POST /auth/login`
-*   **Request Payload**:
-    ```json
-    {
-      "username": "student_jennifer",
-      "password": "SecurePassword123"
-    }
-    ```
-*   **Response Headers**:
-    *   `Set-Cookie: session_id=sess_abcd1234...; HttpOnly; SameSite=Lax; Path=/`
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "id": "usr_902341",
-      "username": "student_jennifer",
-      "email": "jennifer@school.org"
-    }
-    ```
+* **Path**: `POST /api/auth/login` (alias: `POST /auth/login`)
+* **Request Payload**:
+  ```json
+  {
+    "username": "ivan_petrov",
+    "password": "SecurePassword123"
+  }
+  ```
+* **Response Headers**:
+  * Sets `session_id` `HttpOnly` cookie (`SameSite=None; Secure` over HTTPS, `SameSite=Lax` over plain HTTP, 7-day `Max-Age`).
+* **Response (200 OK)**:
+  ```json
+  {
+    "id": "usr_902341ab12cd34ef",
+    "username": "ivan_petrov",
+    "email": "ivan@school42.ru"
+  }
+  ```
 
-### Me (Current User Verification)
-*   **Path**: `GET /auth/me`
-*   **Request headers**: Include `session_id` cookie.
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "id": "usr_902341",
-      "username": "student_jennifer",
-      "email": "jennifer@school.org"
-    }
-    ```
+### Current User (`Me`)
+* **Path**: `GET /api/auth/me` (alias: `GET /auth/me`)
+* **Cookies**: `session_id`
+* **Response (200 OK)**:
+  ```json
+  {
+    "id": "usr_902341ab12cd34ef",
+    "username": "ivan_petrov",
+    "email": "ivan@school42.ru"
+  }
+  ```
 
 ### Logout
-*   **Path**: `POST /auth/logout`
-*   **Response Headers**: Clears the `session_id` cookie.
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "success": true,
-      "message": "Logged out successfully"
-    }
-    ```
+* **Path**: `POST /api/auth/logout` (alias: `POST /auth/logout`)
+* **Behavior**: Marks current session `revoked_at` in SQLite and clears `session_id` cookie.
+* **Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "message": "Выход выполнен успешно."
+  }
+  ```
 
 ### Password Reset Request
-*   **Path**: `POST /auth/password-reset/request`
-*   **Request Payload**:
-    ```json
-    {
-      "email": "jennifer@school.org"
-    }
-    ```
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "success": true,
-      "message": "If the email is registered, a 6-digit reset code has been sent."
-    }
-    ```
+* **Path**: `POST /api/auth/password-reset/request`
+* **Request Payload**:
+  ```json
+  {
+    "email": "ivan@school42.ru"
+  }
+  ```
+* **Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "message": "Если указанный адрес зарегистрирован, на него отправлен 6-значный код восстановления."
+  }
+  ```
 
 ### Password Reset Confirm
-*   **Path**: `POST /auth/password-reset/confirm`
-*   **Request Payload**:
-    ```json
-    {
-      "email": "jennifer@school.org",
-      "code": "123456",
-      "new_password": "MySuperNewPassword456"
-    }
-    ```
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "success": true,
-      "message": "Password updated successfully. All active sessions have been revoked."
-    }
-    ```
+* **Path**: `POST /api/auth/password-reset/confirm`
+* **Request Payload**:
+  ```json
+  {
+    "email": "ivan@school42.ru",
+    "code": "123456",
+    "new_password": "NewSecurePassword456"
+  }
+  ```
+* **Behavior**: Verifies 6-digit OTP SHA-256 hash & 15-minute expiry, updates PBKDF2 password hash, marks code as used, and revokes all active sessions for the user.
+* **Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "message": "Пароль успешно обновлен. Все активные сессии завершены."
+  }
+  ```
 
 ---
 
 ## 2. Classroom Endpoints
 
 ### List My Classrooms
-*   **Path**: `GET /classrooms`
-*   **Response Payload (200 OK)**:
-    ```json
-    [
-      {
-        "id": "cr_101",
-        "name": "Chemistry Group A",
-        "description": "Weekly laboratory calendar",
-        "owner_id": "usr_902341",
-        "owner_username": "student_jennifer",
-        "invite_code": "CHEM-902",
-        "user_role": "owner",
-        "created_at": "2026-06-15T02:00:00Z"
-      }
-    ]
-    ```
+* **Path**: `GET /api/classrooms`
+* **Response (200 OK)**:
+  ```json
+  [
+    {
+      "id": "cr_a1b2c3d4e5f60718",
+      "name": "10 «А» класс",
+      "description": "Расписание контрольных и классных мероприятий",
+      "owner_id": "usr_902341ab12cd34ef",
+      "owner_username": "ivan_petrov",
+      "invite_code": "A7K9P2",
+      "user_role": "owner",
+      "is_closed": false,
+      "max_members": 30,
+      "created_at": "2026-09-01T08:00:00.000Z"
+    }
+  ]
+  ```
 
 ### Create Classroom
-*   **Path**: `POST /classrooms`
-*   **Request Payload**:
-    ```json
-    {
-      "name": "Chemistry Group A",
-      "description": "Weekly laboratory calendar"
-    }
-    ```
-*   **Response Payload (201 Created)**:
-    ```json
-    {
-      "id": "cr_101",
-      "name": "Chemistry Group A",
-      "description": "Weekly laboratory calendar",
-      "owner_id": "usr_902341",
-      "owner_username": "student_jennifer",
-      "invite_code": "CHEM-902",
-      "user_role": "owner",
-      "created_at": "2026-06-15T02:00:00Z"
-    }
-    ```
+* **Path**: `POST /api/classrooms`
+* **Request Payload**:
+  ```json
+  {
+    "name": "10 «А» класс",
+    "description": "Расписание контрольных и классных мероприятий"
+  }
+  ```
+* **Response (201 Created)**: Classroom object with `user_role: "owner"`.
 
 ### Join Classroom by Invite Code
-*   **Path**: `POST /classrooms/join`
-*   **Request Payload**:
-    ```json
-    {
-      "invite_code": "CHEM-902"
-    }
-    ```
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "id": "cr_101",
-      "name": "Chemistry Group A",
-      "description": "Weekly laboratory calendar",
-      "owner_id": "usr_902341",
-      "owner_username": "student_jennifer",
-      "invite_code": "CHEM-902",
-      "user_role": "member",
-      "created_at": "2026-06-15T02:00:00Z"
-    }
-    ```
+* **Path**: `POST /api/classrooms/join`
+* **Request Payload**:
+  ```json
+  {
+    "invite_code": "A7K9P2"
+  }
+  ```
+* **Response (200 OK)**: Classroom object with `user_role: "member"` (or `403` if `is_closed` is `true` or `max_members` limit is reached; `404` if code does not exist).
 
 ### Get Classroom Details
-*   **Path**: `GET /classrooms/{classroom_id}`
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "id": "cr_101",
-      "name": "Chemistry Group A",
-      "description": "Weekly laboratory calendar",
-      "owner_id": "usr_902341",
-      "owner_username": "student_jennifer",
-      "invite_code": "CHEM-902",
-      "user_role": "member",
-      "created_at": "2026-06-15T02:00:00Z"
-    }
-    ```
+* **Path**: `GET /api/classrooms/:classroom_id`
+* **Response (200 OK)**: Classroom object for enrolled members (`403` if non-member).
 
-### Update Classroom (Owner-Only)
-*   **Path**: `PATCH /classrooms/{classroom_id}`
-*   **Request Payload**:
-    ```json
-    {
-      "name": "Chemistry Group A (Advanced)",
-      "description": "New schedule information"
-    }
-    ```
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "id": "cr_101",
-      "name": "Chemistry Group A (Advanced)",
-      "description": "New schedule information",
-      "owner_id": "usr_902341",
-      "owner_username": "student_jennifer",
-      "invite_code": "CHEM-902",
-      "user_role": "owner",
-      "created_at": "2026-06-15T02:00:00Z"
-    }
-    ```
+### Update Classroom Settings (Owner Only)
+* **Path**: `PATCH /api/classrooms/:classroom_id`
+* **Request Payload**:
+  ```json
+  {
+    "name": "10 «А» класс (профиль)",
+    "description": "Обновленное описание группы",
+    "is_closed": true,
+    "max_members": 28
+  }
+  ```
+* **Response (200 OK)**: Updated classroom object (`403` if caller is `admin` or `member`).
 
-### Delete Classroom (Owner-Only)
-*   **Path**: `DELETE /classrooms/{classroom_id}`
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "success": true,
-      "message": "Classroom and all associated occurrences deleted completely."
-    }
-    ```
+### Delete Classroom (Owner Only)
+* **Path**: `DELETE /api/classrooms/:classroom_id`
+* **Response (200 OK)**:
+  ```json
+  {
+    "success": true,
+    "message": "Класс и все связанные записи удалены."
+  }
+  ```
 
 ---
 
 ## 3. Classroom Members Endpoints
 
-### Get Roster/Members
-*   **Path**: `GET /classrooms/{classroom_id}/members`
-*   **Response Payload (200 OK)**:
-    ```json
-    [
-      {
-        "id": "mem_2092",
-        "user_id": "usr_902341",
-        "username": "student_jennifer",
-        "role": "owner",
-        "created_at": "2026-06-15T02:00:00Z"
-      },
-      {
-        "id": "mem_3120",
-        "user_id": "usr_556012",
-        "username": "assistant_bobby",
-        "role": "admin",
-        "created_at": "2026-06-15T02:15:00Z"
-      }
-    ]
-    ```
+### List Members
+* **Path**: `GET /api/classrooms/:classroom_id/members`
+* **Response (200 OK)**: Array of `{ id, user_id, username, role, created_at }`.
 
-### Force Join/Add Member by Username (Owner/Admin Only)
-*   **Path**: `POST /classrooms/{classroom_id}/members`
-*   **Request Payload**:
-    ```json
-    {
-      "username": "assistant_bobby",
-      "role": "admin"
-    }
-    ```
-*   **Response Payload (201 Created)**:
-    ```json
-    {
-      "id": "mem_3120",
-      "user_id": "usr_556012",
-      "username": "assistant_bobby",
-      "role": "admin",
-      "created_at": "2026-06-15T02:15:00Z"
-    }
-    ```
+### Add Member by Username (Owner / Admin)
+* **Path**: `POST /api/classrooms/:classroom_id/members`
+* **Permissions**: `owner` can add `member` or `admin`; `admin` can only add `member`. Respects `max_members`.
+* **Request Payload**:
+  ```json
+  {
+    "username": "maria_sidorova",
+    "role": "member"
+  }
+  ```
+* **Response (201 Created)**: Created membership object.
 
-### Update Member Role (Owner-Only)
-*   **Path**: `PATCH /classrooms/{classroom_id}/members/{member_id}`
-*   **Request Payload**:
-    ```json
-    {
-      "role": "admin"
-    }
-    ```
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "id": "mem_3120",
-      "user_id": "usr_556012",
-      "username": "assistant_bobby",
-      "role": "admin",
-      "created_at": "2026-06-15T02:15:00Z"
-    }
-    ```
+### Update Member Role (Owner Only)
+* **Path**: `PATCH /api/classrooms/:classroom_id/members/:member_id`
+* **Request Payload**:
+  ```json
+  {
+    "role": "admin"
+  }
+  ```
+* **Response (200 OK)**: Updated membership object.
 
-### Remove Member (Owner/Admin Only)
-*   **Path**: `DELETE /classrooms/{classroom_id}/members/{member_id}`
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "success": true,
-      "message": "Member removed successfully"
-    }
-    ```
+### Remove Member / Leave Classroom
+* **Path**: `DELETE /api/classrooms/:classroom_id/members/:member_id`
+* **Permissions**: Non-owner self-leave allowed; `owner` can remove `admin`/`member`; `admin` can remove `member`. `owner` cannot be removed (`400`).
 
 ---
 
 ## 4. Classroom Events Endpoints
 
-### List Events (In UTC)
-*   **Path**: `GET /classrooms/{classroom_id}/events`
-*   **Response Payload (200 OK)**:
-    ```json
-    [
-      {
-        "id": "ev_0091",
-        "classroom_id": "cr_101",
-        "creator_id": "usr_902341",
-        "creator_username": "student_jennifer",
-        "title": "Semester Quiz 1",
-        "description": "Covers chapter 1 to 4 of organic chemistry",
-        "starts_at": "2026-06-20T09:00:00Z",
-        "ends_at": "2026-06-20T10:00:00Z",
-        "created_at": "2026-06-15T02:30:00Z",
-        "updated_at": "2026-06-15T02:30:00Z"
-      }
-    ]
-    ```
+### List Events (Sorted Chronologically by `starts_at`)
+* **Path**: `GET /api/classrooms/:classroom_id/events`
+* **Response (200 OK)**: Array of event objects in UTC ISO-8601 format.
 
-### Create Event (Owner/Admin Only)
-*   **Path**: `POST /classrooms/{classroom_id}/events`
-*   **Request Payload**:
-    ```json
-    {
-      "title": "Semester Quiz 1",
-      "description": "Covers chapter 1 to 4 of organic chemistry",
-      "starts_at": "2026-06-20T09:00:00Z",
-      "ends_at": "2026-06-20T10:00:00Z"
-    }
-    ```
-*   **Response Payload (201 Created)**:
-    ```json
-    {
-      "id": "ev_0091",
-      "classroom_id": "cr_101",
-      "creator_id": "usr_902341",
-      "creator_username": "student_jennifer",
-      "title": "Semester Quiz 1",
-      "description": "Covers chapter 1 to 4 of organic chemistry",
-      "starts_at": "2026-06-20T09:00:00Z",
-      "ends_at": "2026-06-20T10:00:00Z",
-      "created_at": "2026-06-15T02:30:00Z",
-      "updated_at": "2026-06-15T02:30:00Z"
-    }
-    ```
+### Create Event (Owner / Admin Only)
+* **Path**: `POST /api/classrooms/:classroom_id/events`
+* **Request Payload**:
+  ```json
+  {
+    "title": "Контрольная работа по алгебре",
+    "description": "Повторить параграфы 4–7",
+    "starts_at": "2026-10-15T03:00:00.000Z",
+    "ends_at": "2026-10-15T04:00:00.000Z"
+  }
+  ```
+* **Response (201 Created)**: Created event object (`400` if `ends_at <= starts_at` or title `< 2` chars).
 
-### Get Specific Event
-*   **Path**: `GET /classrooms/{classroom_id}/events/{event_id}`
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "id": "ev_0091",
-      "classroom_id": "cr_101",
-      "creator_id": "usr_902341",
-      "creator_username": "student_jennifer",
-      "title": "Semester Quiz 1",
-      "description": "Covers chapter 1 to 4 of organic chemistry",
-      "starts_at": "2026-06-20T09:00:00Z",
-      "ends_at": "2026-06-20T10:00:00Z",
-      "created_at": "2026-06-15T02:30:00Z",
-      "updated_at": "2026-06-15T02:30:00Z"
-    }
-    ```
+### Get Event Details
+* **Path**: `GET /api/classrooms/:classroom_id/events/:event_id`
 
-### Update Event (Owner/Admin Only)
-*   **Path**: `PATCH /classrooms/{classroom_id}/events/{event_id}`
-*   **Request Payload**:
-    ```json
-    {
-      "title": "Semester Quiz 1 - Postponed",
-      "starts_at": "2026-06-21T09:00:00Z",
-      "ends_at": "2026-06-21T10:00:00Z"
-    }
-    ```
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "id": "ev_0091",
-      "classroom_id": "cr_101",
-      "creator_id": "usr_902341",
-      "creator_username": "student_jennifer",
-      "title": "Semester Quiz 1 - Postponed",
-      "description": "Covers chapter 1 to 4 of organic chemistry",
-      "starts_at": "2026-06-21T09:00:00Z",
-      "ends_at": "2026-06-21T10:00:00Z",
-      "created_at": "2026-06-15T02:30:00Z",
-      "updated_at": "2026-06-15T02:40:00Z"
-    }
-    ```
+### Update Event (Owner / Admin Only)
+* **Path**: `PATCH /api/classrooms/:classroom_id/events/:event_id`
 
-### Delete Event (Owner/Admin Only)
-*   **Path**: `DELETE /classrooms/{classroom_id}/events/{event_id}`
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "success": true,
-      "message": "Event deleted successfully."
-    }
-    ```
+### Delete Event (Owner / Admin Only)
+* **Path**: `DELETE /api/classrooms/:classroom_id/events/:event_id`
 
 ---
 
-## 5. Health Endpoints
+## 5. Health & Error Format
 
-### Base Health
-*   **Path**: `GET /health`
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "status": "healthy",
-      "timestamp": "2026-06-15T02:43:23Z"
-    }
-    ```
-
-### Database Health
-*   **Path**: `GET /health/db`
-*   **Response Payload (200 OK)**:
-    ```json
-    {
-      "status": "healthy",
-      "database": "sqlite_local",
-      "connection": "ok"
-    }
-    ```
-
----
-
-## 6. Error Response Protocol
-
-If any server operations fail, a structured, unified error schema is systematically returned. 
-
-*   **Failure Schema (4xx / 5xx Status Code)**:
-    ```json
-    {
-      "detail": "Descriptive error message describing exactly what failed, readable by human."
-    }
-    ```
+* `GET /api/health` (alias `/health`) -> `{ "status": "healthy", "timestamp": "..." }`
+* `GET /api/health/db` (alias `/health/db`) -> `{ "status": "healthy", "database": "sqlite", "connection": "ok" }`
+* All `4xx` / `5xx` errors return:
+  ```json
+  {
+    "detail": "Понятное описание причины ошибки."
+  }
+  ```

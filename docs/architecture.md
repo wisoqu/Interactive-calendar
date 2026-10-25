@@ -1,44 +1,48 @@
 # System Architecture - Interactive Calendar
 
-This document outlines the layering and separation of concerns adopted for the Interactive Calendar codebase.
+This document describes the architecture of the Interactive Calendar full-stack web application.
 
-## 1. Architectural Layers
+## 1. Unified Full-Stack Architecture
 
-Both the Python FastAPI backend and the Express development runner mirror a strict multi-tiered dependency rule. Dependency flow is monodirectional: outermost layers depend inward on stable domain policies, and there are absolutely no circular or horizontal shortcuts.
+The project is built around a lightweight, single-runtime TypeScript stack designed to run reliably on low-cost VPS instances (512 MB – 1 GB RAM) without external database servers:
 
 ```
-       [ HTTP API (Routers / Controllers) ]               (Outermost Layer)
-                     │
-                     ▼
-        [ Application Layer (Services) ]
-                     │
-                     ▼
-   [ Domain Model (Entities, Enums, Policies) ] <───┐     (Innermost Core)
-                     ▲                              │
-                     │                              │
-   [ Infrastructure (Repositories, Cryptography) ] ─┘
+┌─────────────────────────────────────────────────────────────┐
+│                   Browser (React 19 SPA)                    │
+│  AuthPage · HomePage · CalendarPage · MembersPage · Settings│
+│       AuthContext · ThemeLanguageContext · apiClient        │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ JSON over HTTPS / HttpOnly Cookie
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                Node.js 20 + Express (server.ts)             │
+│  • Session & Cookie Middleware (Adaptive HTTP / HTTPS)      │
+│  • Role-Based Access Control (Owner / Admin / Member)       │
+│  • Domain Validation (UTC timestamps, capacity, closed flag)│
+│  • Nodemailer SMTP Service (6-digit SHA-256 hashed OTP)     │
+│  • Static Asset Serving (dist/) / Vite Middleware in Dev    │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ Synchronous Prepared SQL (WAL)
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│            Embedded SQLite Database (better-sqlite3)        │
+│    users · classrooms · members · events · sessions · otp   │
+│                Persisted in ./data/calendar_db.sqlite       │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 1. Domain Layer (`/domain` or `/src/domain`)
-The core of the application containing pure enterprise logic and structures:
-*   **Entities**: Domain mappings representing essential data boundaries (User, Classroom, ClassMember, Event, Session, ResetCode).
-*   **Policies**: Static rules governing access rights and actions (e.g., matching User roles to classroom operations).
-*   **Exceptions**: Pure domain-level exceptions representing violation of invariants (e.g., `ClassroomJoinException`, `PermissionDeniedException`, `SessionExpiredException`).
+## 2. Module Responsibilities
 
-### 2. Infrastructure Layer (`/infrastructure` or `/src/infrastructure`)
-Provides technology-specific implements backing core interfaces:
-*   **Repositories**: Concrete database helpers carrying SQL queries/commands. Business logic remains completely absent from this layer.
-*   **Security/Cryptography**: Password hashing, secure string generators for invite codes and session IDs, SHA-256 calculators.
-*   **DB Drivers**: Handles schema creation, active session states, and connection pooling.
+1. **Presentation Layer (`/src`)**
+   * `src/api/client.ts`: Centralized `fetch` wrapper with `credentials: "include"` and unified error handling.
+   * `src/store/AuthContext.tsx`: Restores active user session via `GET /api/auth/me` and synchronizes the user's classroom list.
+   * `src/store/ThemeLanguageContext.tsx`: Manages Russian/English localization and Light/Dark theme state persisted in `localStorage`.
+   * `src/pages/*`: Modular views for authentication/recovery, classroom overview, interactive calendar (Month, Week, List views + 4-step date/time picker + overlap warning), member management, and owner-only settings.
 
-### 3. Application Layer (`/application/services` or `/src/services`)
-Orchestrates domain models and infrastructure capabilities to achieve workflows:
-*   Encapsulates atomic behaviors (e.g., `ClassroomService.join_by_code()`, `AuthService.reset_password()`).
-*   Verifies authorization rules by delegating to permission policies.
-*   Performs coordinate operations (saving event, creating join records).
+2. **Application & API Layer (`/server.ts`)**
+   * Exposes `createServerApp()` for clean separation between HTTP routing, database lifecycle, and automated end-to-end verification (`tests/verify.ts`).
+   * Enforces authentication via server-side sessions (`sessions` table) and classroom-scoped RBAC checks on every protected route.
+   * Dispatches password recovery codes via configurable `SMTP_*` environment variables using `nodemailer`.
 
-### 4. Router/API Layer (`/api` or `/src/routes`)
-Unpacks and translates network schemas to domain workflows, returning standardized responses:
-*   Invokes appropriate services.
-*   Sets session cookies in HTTP response headers.
-*   Catches business exceptions and wraps them into unified, descriptive API errors.
+3. **Persistence Layer (`better-sqlite3`)**
+   * Runs inside the Node.js process with `PRAGMA journal_mode = WAL` and indexed foreign keys, eliminating network round-trips and heavy background DBMS memory usage.

@@ -16,6 +16,7 @@ export interface Classroom {
   user_role: ClassMemberRole;
   is_closed?: boolean;
   max_members?: number;
+  member_count?: number;
   created_at: string;
 }
 

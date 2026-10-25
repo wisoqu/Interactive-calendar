@@ -8,13 +8,15 @@ build/
 out/
 coverage/
 
-# Local SQLite databases and runtime files
+# Persistent SQLite database directory and runtime files
+data/
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
 *.db
 *.db-journal
+calendar_db.json
 
 # Environment variables
 .env
@@ -43,4 +45,3 @@ Thumbs.db
 *.njsproj
 *.sln
 *.swp
-

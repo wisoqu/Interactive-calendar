@@ -18,6 +18,7 @@ export interface Translations {
   cancel: string;
   save: string;
   active: string;
+  toggle_theme: string;
 
   // AuthPage
   login_title: string;
@@ -125,242 +126,244 @@ export interface Translations {
 
 export const translationDict: Record<Language, Translations> = {
   ru: {
-    app_title: "Интерактивный календарь",
-    group: "Группа",
-    choose_group: "Выбрать группу...",
+    app_title: "Школьный календарь",
+    group: "Класс",
+    choose_group: "Выберите класс",
     overview: "Обзор",
     calendar_app: "Календарь",
     members_roster: "Участники",
     settings_config: "Настройки",
     logout: "Выйти",
-    footer_text: "Интерактивный школьный календарь © 2026.",
-    syncing_session: "Синхронизация сессии...",
-    you: "Вы",
+    footer_text: "Интерактивный школьный календарь класса",
+    syncing_session: "Загрузка...",
+    you: "вы",
     cancel: "Отмена",
     save: "Сохранить",
-    active: "активно",
+    active: "групп",
+    toggle_theme: "Переключить тему оформления",
 
     // AuthPage
-    login_title: "Войдите, чтобы просматривать расписание школы и клубов",
-    register_title: "Создайте учетную запись для планировщика классов",
-    forgot_title: "Восстановите пароль через зарегистрированную почту",
-    confirm_title: "Полная верификация сброса пароля с помощью кода",
+    login_title: "Войдите в аккаунт для работы с расписанием класса",
+    register_title: "Регистрация нового пользователя",
+    forgot_title: "Восстановление пароля по электронной почте",
+    confirm_title: "Введите код из письма и задайте новый пароль",
     username: "Имя пользователя",
     password: "Пароль",
     new_password: "Новый пароль",
-    email: "Адрес почты (необязательно)",
-    email_recovery_help: "Введите email для возможности восстановления",
-    username_placeholder: "Введите имя пользователя",
-    password_placeholder: "••••••••",
+    email: "Электронная почта (необязательно)",
+    email_recovery_help: "Нужна для восстановления пароля",
+    username_placeholder: "Введите логин",
+    password_placeholder: "Введите пароль",
     forgot_password: "Забыли пароль?",
     log_in: "Войти",
     logging_in: "Вход...",
-    dont_have_account: "Нет учетной записи?",
-    sign_up: "Регистрация",
-    already_registered: "Уже зарегистрированы?",
-    creating_account: "Создание аккаунта...",
-    note_recovery: "* Примечание: Для восстановления пароля требуется зарегистрированный адрес электронной почты, на который отправляется верификационный код.",
-    registered_email: "Зарегистрированный адрес почты",
-    enter_recovery_email: "Введите ваш email для восстановления",
+    dont_have_account: "Нет аккаунта?",
+    sign_up: "Зарегистрироваться",
+    already_registered: "Уже есть аккаунт?",
+    creating_account: "Регистрация...",
+    note_recovery: "Укажите адрес электронной почты, привязанный к вашему аккаунту. Мы отправим на него одноразовый 6-значный код подтверждения.",
+    registered_email: "Электронная почта",
+    enter_recovery_email: "name@example.com",
     back: "Назад",
-    send_code: "Запросить код",
+    send_code: "Отправить код",
     sending_code: "Отправка...",
-    verification_code_label: "6-значный код подтверждения",
-    verification_placeholder: "Введите 6-значный пин-код",
+    verification_code_label: "6-значный код из письма",
+    verification_placeholder: "000000",
     new_password_placeholder: "Не менее 6 символов",
-    resetting: "Сброс...",
-    confirm_reset: "Подтвердить сброс",
+    resetting: "Сохранение...",
+    confirm_reset: "Сменить пароль",
 
     // HomePage
-    welcome_title: "Школьные и общинные порталы",
-    welcome_desc: "Создавайте академические группы, внеклассные кружки или управляйте расписанием уроков. Распространяйте 6-значные инвойс-коды, распределяйте роли и записывайте события в формате UTC.",
-    registered_classrooms: "Зарегистрированные классы",
-    no_classrooms: "Нет зачисленных классов",
-    no_classrooms_desc: "Присоединяйтесь к существующему классу по коду или создайте новую группу.",
+    welcome_title: "Учебные классы и школьные группы",
+    welcome_desc: "Планируйте контрольные работы, классные часы, олимпиады, собрания и экскурсии в едином календаре класса. Приглашайте учеников по коду и распределяйте права доступа.",
+    registered_classrooms: "Мои классы и группы",
+    no_classrooms: "Вы пока не состоите ни в одном классе",
+    no_classrooms_desc: "Присоединитесь к существующему классу по коду приглашения или создайте новую учебную группу.",
     code: "Код",
-    no_desc: "Описание отсутствует.",
+    no_desc: "Описание не указано.",
     owner: "Владелец",
     open: "Открыть",
-    join_by_code: "Войти по коду",
-    enroll_btn: "Записаться в класс",
-    create_classroom: "Создать класс",
-    classroom_name: "Название класса *",
-    classroom_desc_label: "Описание",
-    classroom_desc_placeholder: "Опишите расписание, задачи или правила группы...",
-    establish_btn: "Учредить класс",
+    join_by_code: "Вступить по коду",
+    enroll_btn: "Присоединиться",
+    create_classroom: "Новый класс",
+    classroom_name: "Название класса или группы *",
+    classroom_desc_label: "Описание (необязательно)",
+    classroom_desc_placeholder: "Например: 10 «А» класс, расписание контрольных и мероприятий",
+    establish_btn: "Создать класс",
 
     // CalendarPage
-    classroom_events: "События в группе",
-    sorted_schedules: "Расписание событий для",
-    add_event: "Создать событие",
-    edit_event_title: "Редактировать событие",
+    classroom_events: "Календарь событий",
+    sorted_schedules: "Мероприятия и важные даты:",
+    add_event: "Добавить событие",
+    edit_event_title: "Редактирование события",
     create_event_title: "Новое событие",
-    event_title_label: "Имя события *",
-    event_title_placeholder: "например, Тест по биологии, глава 3",
-    event_desc_label: "Описание события",
-    event_desc_placeholder: "Детали, домашнее задание, полезные ссылки...",
-    starts_at: "Время начала *",
-    ends_at: "Время окончания *",
-    publish_event: "Опубликовать событие",
+    event_title_label: "Название события *",
+    event_title_placeholder: "Например: Контрольная работа по алгебре",
+    event_desc_label: "Описание и детали",
+    event_desc_placeholder: "Кабинет, список тем для подготовки, комментарии...",
+    starts_at: "Начало *",
+    ends_at: "Окончание *",
+    publish_event: "Создать событие",
     save_changes: "Сохранить изменения",
-    querying: "Запрос данных расписания...",
-    event_logs_empty: "Календарь пуст",
-    no_events_desc: "В этой группе пока нет запланированных событий.",
-    by: "Автор",
+    querying: "Загрузка расписания...",
+    event_logs_empty: "Событий пока нет",
+    no_events_desc: "В этом классе еще не запланировано ни одного мероприятия.",
+    by: "Добавил",
     edit_event_tooltip: "Редактировать событие",
     delete_event_tooltip: "Удалить событие",
 
     // MembersPage
-    members_roster_title: "Список участников",
-    manage_roles_desc: "Управление ролями и просмотр участников для",
-    enrolled_participants: "Участники группы",
+    members_roster_title: "Участники класса",
+    manage_roles_desc: "Состав учебной группы и роли:",
+    enrolled_participants: "Список участников",
     loading_roster: "Загрузка списка участников...",
-    force_add: "Принудительно зачислить",
-    roster_admin_title: "Администрирование участников",
-    existing_username: "Существующее имя пользователя *",
-    enter_username_placeholder: "Укажите имя пользователя",
-    assigned_role: "Назначаемая роль",
+    force_add: "Добавить по логину",
+    roster_admin_title: "Управление составом",
+    existing_username: "Логин зарегистрированного пользователя *",
+    enter_username_placeholder: "Введите имя пользователя",
+    assigned_role: "Роль в классе",
     member_role: "Участник",
     admin_role: "Администратор",
-    instruct_enrollment: "Зачислить в группу",
-    roster_control_policies: "Политика управления списком",
-    policy_one: "Только Владелец может изменять роли участников или назначать администраторов.",
-    policy_two: "Администраторы могут публиковать события и исключать участников, но не могут менять владельца или других администраторов.",
-    policy_three: "Владелец не может покинуть класс или удалить свое членство; для этого нужно аннулировать весь класс целиком.",
+    instruct_enrollment: "Добавить в класс",
+    roster_control_policies: "Правила разграничения прав",
+    policy_one: "Назначать и снимать администраторов может только владелец класса.",
+    policy_two: "Администраторы управляют событиями и могут исключать обычных участников.",
+    policy_three: "Владелец не может покинуть собственный класс — при необходимости класс удаляется в настройках.",
 
     // SettingsPage
     no_classroom_selected: "Класс не выбран",
-    pick_classroom_desc: "Выберите или создайте групповой портал в навигационном меню выше.",
+    pick_classroom_desc: "Выберите учебную группу в верхнем меню или на вкладке «Обзор».",
     settings_restricted: "Доступ ограничен",
-    only_owner_restricted: "Только создатель/владелец группы ({owner}) имеет права изменять параметры класса, читать логи безопасности или расформировывать группу.",
-    settings_desc: "Регулируйте свойства кабинета, отображайте коды авторизации и управляйте административным циклом.",
-    group_configs: "Параметры группы",
-    save_configs: "Сохранить конфигурацию",
-    active_share_code: "Активный код инвайта",
-    distribute_desc: "Передайте этот код ученикам или представителям класса",
-    entering_code_desc: "Ввод этого кода на главной странице мгновенно регистрирует входящего как 'участника'.",
-    danger_zone: "Опасная зона",
-    danger_desc: "Удаление группы безвозвратно сотрет всех участников, расписания и файлы настроек.",
-    terminate_btn: "Уничтожить класс"
+    only_owner_restricted: "Изменять настройки класса и управлять его удалением может только владелец группы ({owner}).",
+    settings_desc: "Основные параметры учебной группы, код приглашения и правила вступления.",
+    group_configs: "Основные параметры",
+    save_configs: "Сохранить настройки",
+    active_share_code: "Код приглашения",
+    distribute_desc: "Сообщите этот код ученикам класса",
+    entering_code_desc: "По этому коду зарегистрированные пользователи могут вступить в группу с ролью «Участник».",
+    danger_zone: "Удаление класса",
+    danger_desc: "При удалении класса все его события и список участников удаляются безвозвратно.",
+    terminate_btn: "Удалить класс"
   },
   en: {
-    app_title: "Interactive Calendar",
-    group: "Group",
-    choose_group: "Choose Group...",
+    app_title: "School Calendar",
+    group: "Class",
+    choose_group: "Select class",
     overview: "Overview",
-    calendar_app: "Calendar App",
-    members_roster: "Members Roster",
-    settings_config: "Settings Config",
-    logout: "Logout",
-    footer_text: "Interactive Classroom Calendar © 2026.",
-    syncing_session: "Syncing session token...",
-    you: "You",
+    calendar_app: "Calendar",
+    members_roster: "Members",
+    settings_config: "Settings",
+    logout: "Log out",
+    footer_text: "Interactive School Classroom Calendar",
+    syncing_session: "Loading...",
+    you: "you",
     cancel: "Cancel",
     save: "Save",
-    active: "active",
+    active: "groups",
+    toggle_theme: "Toggle color theme",
 
     // AuthPage
-    login_title: "Log in to view school and club schedules",
-    register_title: "Create your classroom planner account",
-    forgot_title: "Recover your password via registered email",
-    confirm_title: "Complete password reset verification code authentication",
+    login_title: "Sign in to view your classroom schedule and events",
+    register_title: "Create a new account",
+    forgot_title: "Reset your password via email",
+    confirm_title: "Enter the verification code and choose a new password",
     username: "Username",
     password: "Password",
-    new_password: "New Password",
-    email: "Email Address (Optional)",
-    email_recovery_help: "Enter email for recovery option",
-    username_placeholder: "Enter your username",
-    password_placeholder: "••••••••",
+    new_password: "New password",
+    email: "Email address (optional)",
+    email_recovery_help: "Used for password recovery",
+    username_placeholder: "Enter username",
+    password_placeholder: "Enter password",
     forgot_password: "Forgot password?",
-    log_in: "Log In",
-    logging_in: "Logging in...",
-    dont_have_account: "Don't have an account?",
-    sign_up: "Sign up",
-    already_registered: "Already registered?",
+    log_in: "Sign in",
+    logging_in: "Signing in...",
+    dont_have_account: "No account yet?",
+    sign_up: "Create account",
+    already_registered: "Already have an account?",
     creating_account: "Creating account...",
-    note_recovery: "* Note: Password recovery requires entering your registered email address to emit recovery verification numbers.",
-    registered_email: "Registered Email Address",
-    enter_recovery_email: "Enter your recovery email",
+    note_recovery: "Enter the email address linked to your account. We will send a one-time 6-digit verification code.",
+    registered_email: "Email address",
+    enter_recovery_email: "name@example.com",
     back: "Back",
-    send_code: "Request Code",
+    send_code: "Send code",
     sending_code: "Sending...",
-    verification_code_label: "6-Digit Verification Code",
-    verification_placeholder: "Enter 6-digit pin code",
+    verification_code_label: "6-digit verification code",
+    verification_placeholder: "000000",
     new_password_placeholder: "At least 6 characters",
-    resetting: "Resetting...",
-    confirm_reset: "Confirm Reset",
+    resetting: "Saving...",
+    confirm_reset: "Update password",
 
     // HomePage
-    welcome_title: "School & Community Portals",
-    welcome_desc: "Create academic groups, extracurricular circles, or manage lesson calendars. Distribute 6-digit invite codes, assign roles, and record schedules in UTC coordinates.",
-    registered_classrooms: "Registered Classrooms",
-    no_classrooms: "No Classrooms Enrolled",
-    no_classrooms_desc: "Join an existing classroom by code or create a new group.",
+    welcome_title: "Classrooms & School Groups",
+    welcome_desc: "Organize exams, homerooms, competitions, parent meetings, and field trips in one shared classroom calendar. Invite students with a 6-character code and manage roles.",
+    registered_classrooms: "My Classrooms",
+    no_classrooms: "No classrooms yet",
+    no_classrooms_desc: "Join an existing classroom with an invite code or create a new group.",
     code: "Code",
     no_desc: "No description provided.",
     owner: "Owner",
     open: "Open",
-    join_by_code: "Join by Code",
-    enroll_btn: "Enroll in Class",
-    create_classroom: "Create Classroom",
-    classroom_name: "Classroom Name *",
-    classroom_desc_label: "Description",
-    classroom_desc_placeholder: "Describe your schedule, class, or community policies...",
-    establish_btn: "Establish Classroom",
+    join_by_code: "Join by code",
+    enroll_btn: "Join classroom",
+    create_classroom: "New classroom",
+    classroom_name: "Classroom or group name *",
+    classroom_desc_label: "Description (optional)",
+    classroom_desc_placeholder: "e.g. Grade 10A — tests, school events, and deadlines",
+    establish_btn: "Create classroom",
 
     // CalendarPage
-    classroom_events: "Classroom Events",
-    sorted_schedules: "Sorted ascending schedules for",
-    add_event: "Add Event",
-    edit_event_title: "Edit Scheduled Event",
-    create_event_title: "Create Calendar Appointment",
-    event_title_label: "Event Title *",
-    event_title_placeholder: "e.g. Chapter 4 Lab Quiz",
-    event_desc_label: "Description",
-    event_desc_placeholder: "Details, homework resources, study instructions...",
-    starts_at: "Starts At *",
-    ends_at: "Ends At *",
-    publish_event: "Publish Event",
-    save_changes: "Save Changes",
-    querying: "Querying schedule coordinates...",
-    event_logs_empty: "Event Logs Empty",
-    no_events_desc: "There are no events registered for this classroom yet.",
-    by: "By",
+    classroom_events: "Event Calendar",
+    sorted_schedules: "Schedule and upcoming dates for",
+    add_event: "Add event",
+    edit_event_title: "Edit event",
+    create_event_title: "New event",
+    event_title_label: "Event title *",
+    event_title_placeholder: "e.g. Algebra Chapter Test",
+    event_desc_label: "Description & notes",
+    event_desc_placeholder: "Room number, preparation topics, notes...",
+    starts_at: "Starts at *",
+    ends_at: "Ends at *",
+    publish_event: "Create event",
+    save_changes: "Save changes",
+    querying: "Loading schedule...",
+    event_logs_empty: "No events scheduled",
+    no_events_desc: "There are no scheduled events in this classroom yet.",
+    by: "Added by",
     edit_event_tooltip: "Edit event",
     delete_event_tooltip: "Delete event",
 
     // MembersPage
-    members_roster_title: "Members Roster",
-    manage_roles_desc: "Manage roles and view participant logs for",
-    enrolled_participants: "Enrolled Participants",
-    loading_roster: "Loading roster profiles...",
-    force_add: "Force Add Member",
-    roster_admin_title: "Roster Administration",
-    existing_username: "Existing Username *",
-    enter_username_placeholder: "Enter school username",
-    assigned_role: "Assigned Role",
+    members_roster_title: "Classroom Members",
+    manage_roles_desc: "Participants and roles for",
+    enrolled_participants: "Member list",
+    loading_roster: "Loading members...",
+    force_add: "Add by username",
+    roster_admin_title: "Manage members",
+    existing_username: "Registered username *",
+    enter_username_placeholder: "Enter username",
+    assigned_role: "Role",
     member_role: "Member",
     admin_role: "Admin",
-    instruct_enrollment: "Instruct Enrollment",
-    roster_control_policies: "Roster control policies",
-    policy_one: "Only the Owner can mutate member roles or designate Admins.",
-    policy_two: "Admins can publish events and dismiss standard members, but cannot touch Owners or other Admins.",
-    policy_three: "Owners cannot leave or delete their membership; they must delete the classroom instance.",
+    instruct_enrollment: "Add to classroom",
+    roster_control_policies: "Access rules",
+    policy_one: "Only the classroom Owner can promote or demote Admins.",
+    policy_two: "Admins can manage events and remove regular members.",
+    policy_three: "The Owner cannot leave their own classroom; delete the classroom in Settings if needed.",
 
     // SettingsPage
-    no_classroom_selected: "No Classroom Selected",
-    pick_classroom_desc: "Pick or create a classroom pool first using the header navigation.",
-    settings_restricted: "Settings Restricted",
-    only_owner_restricted: "Only the group Creator/Owner ({owner}) has permissions to modify classroom properties, retrieve secure logs, or delete the group.",
-    settings_desc: "Adjust classroom properties, display invitations, or manage administrative lifecycles.",
-    group_configs: "Group Configurations",
-    save_configs: "Save Configurations",
-    active_share_code: "Active Share Code",
-    distribute_desc: "Distribute to students or class representatives",
-    entering_code_desc: "Entering this code on the landing page authorizes instant enrollment as a 'member'.",
-    danger_zone: "Danger Zone",
-    danger_desc: "Erasing the classroom removes memberships, event registers, and settings pools irreversibly.",
-    terminate_btn: "Terminate Classroom"
+    no_classroom_selected: "No classroom selected",
+    pick_classroom_desc: "Select a classroom from the top switcher or Overview tab.",
+    settings_restricted: "Owner access only",
+    only_owner_restricted: "Only the classroom Owner ({owner}) can modify classroom settings or delete the group.",
+    settings_desc: "Configure group details, invite code access, and member limits.",
+    group_configs: "General settings",
+    save_configs: "Save settings",
+    active_share_code: "Invite code",
+    distribute_desc: "Share this code with students",
+    entering_code_desc: "Registered users can enter this code on the Overview page to join as a Member.",
+    danger_zone: "Delete classroom",
+    danger_desc: "Deleting a classroom permanently removes all of its events and member records.",
+    terminate_btn: "Delete classroom"
   }
 };
 
@@ -374,28 +377,51 @@ interface ThemeLanguageContextType {
 
 const ThemeLanguageContext = createContext<ThemeLanguageContextType | undefined>(undefined);
 
+function safeGetStorage(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetStorage(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage quota / sandbox restrictions in cross-origin iframes
+  }
+}
+
 export const ThemeLanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [lang, setLangState] = useState<Language>(() => {
-    const saved = localStorage.getItem("preferred_lang") as Language;
-    return saved === "en" || saved === "ru" ? saved : "ru"; // Russian default
+    const saved = safeGetStorage("preferred_lang");
+    return saved === "en" || saved === "ru" ? saved : "ru";
   });
 
-  const [theme] = useState<Theme>("light");
+  const [theme, setThemeState] = useState<Theme>(() => {
+    const saved = safeGetStorage("preferred_theme");
+    return saved === "dark" || saved === "light" ? saved : "light";
+  });
 
   const setLang = (newLang: Language) => {
     setLangState(newLang);
-    localStorage.setItem("preferred_lang", newLang);
+    safeSetStorage("preferred_lang", newLang);
   };
 
   const setTheme = (newTheme: Theme) => {
-    // Force white/light-only theme as requested, ignore any toggle request
+    setThemeState(newTheme);
+    safeSetStorage("preferred_theme", newTheme);
   };
 
   useEffect(() => {
-    // Always force light theme mode (remove dark class)
     const root = window.document.documentElement;
-    root.classList.remove("dark");
-  }, []);
+    if (theme === "dark") {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+  }, [theme]);
 
   const t = translationDict[lang];
 

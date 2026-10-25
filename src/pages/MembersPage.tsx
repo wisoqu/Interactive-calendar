@@ -3,13 +3,14 @@ import { useAuth } from "../store/AuthContext";
 import { useThemeLanguage } from "../store/ThemeLanguageContext";
 import { ClassMember, ClassMemberRole } from "../types";
 import { apiClient } from "../api/client";
-import { Users, UserPlus, ShieldAlert, Trash2, ArrowRight } from "lucide-react";
+import { NoticeModal, NoticeModalState } from "../components/NoticeModal";
+import { Users, UserPlus, ShieldAlert, ArrowRight, X } from "lucide-react";
 
 export const MembersPage: React.FC = () => {
-  const { currentClassroom, user } = useAuth();
+  const { currentClassroom, user, selectClassroom, refreshClassrooms } = useAuth();
   const { lang, t } = useThemeLanguage();
   const [members, setMembers] = useState<ClassMember[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<NoticeModalState | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [confirmState, setConfirmState] = useState<{
@@ -17,19 +18,28 @@ export const MembersPage: React.FC = () => {
     onConfirm: () => Promise<void> | void;
   } | null>(null);
 
-  // Invitation Form
   const [targetUsername, setTargetUsername] = useState("");
   const [targetRole, setTargetRole] = useState<"admin" | "member">("member");
 
   const fetchMembers = async () => {
     if (!currentClassroom) return;
     setLoading(true);
-    setError(null);
     try {
       const list = await apiClient.listMembers(currentClassroom.id);
       setMembers(list);
     } catch (err: any) {
-      setError(err.message || (lang === "ru" ? "Не удалось загрузить список участников." : "Failed to load group members."));
+      if (err?.status === 403 || err?.status === 404) {
+        await refreshClassrooms();
+      }
+      setNotice({
+        variant: "error",
+        title: lang === "ru" ? "Ошибка загрузки списка" : "Failed to load members",
+        message:
+          err?.message ||
+          (lang === "ru"
+            ? "Не удалось загрузить список участников класса."
+            : "Failed to load classroom members."),
+      });
     } finally {
       setLoading(false);
     }
@@ -37,7 +47,7 @@ export const MembersPage: React.FC = () => {
 
   useEffect(() => {
     fetchMembers();
-  }, [currentClassroom]);
+  }, [currentClassroom?.id]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -46,9 +56,7 @@ export const MembersPage: React.FC = () => {
       }
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   const role = currentClassroom?.user_role || "member";
@@ -59,21 +67,50 @@ export const MembersPage: React.FC = () => {
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentClassroom || !targetUsername.trim()) return;
-    setError(null);
+    setNotice(null);
     setMessage(null);
     setLoading(true);
 
     try {
-      await apiClient.addMember(currentClassroom.id, targetUsername.trim(), targetRole);
-      const addedMsg = lang === "ru" 
-        ? `Пользователь "${targetUsername.trim()}" успешно добавлен в список группы.`
-        : `Successfully added "${targetUsername.trim()}" to the class roster.`;
-      
+      const roleToAssign = isOwner ? targetRole : "member";
+      await apiClient.addMember(currentClassroom.id, targetUsername.trim(), roleToAssign);
+      const addedMsg =
+        lang === "ru"
+          ? `Пользователь «${targetUsername.trim()}» добавлен в класс.`
+          : `Added "${targetUsername.trim()}" to the classroom.`;
+
       setTargetUsername("");
       setMessage(addedMsg);
       await fetchMembers();
+      await refreshClassrooms();
     } catch (err: any) {
-      setError(err.message || (lang === "ru" ? "Пользователь не существует или уже подключен." : "User does not exist or is already enrolled."));
+      if (err?.status === 403) {
+        await refreshClassrooms();
+      }
+      if (err?.code === "CLASSROOM_FULL") {
+        setNotice({
+          variant: "limit",
+          title: lang === "ru" ? "Достигнут лимит участников" : "Member limit reached",
+          message:
+            lang === "ru"
+              ? `Невозможно добавить участника: достигнут установленный лимит класса (${
+                  err?.meta?.max_members ?? ""
+                }). Измените лимит в разделе «Настройки».`
+              : `Cannot add member: classroom capacity limit (${
+                  err?.meta?.max_members ?? ""
+                }) has been reached.`,
+        });
+      } else {
+        setNotice({
+          variant: "error",
+          title: lang === "ru" ? "Не удалось добавить участника" : "Could not add member",
+          message:
+            err?.message ||
+            (lang === "ru"
+              ? "Пользователь не найден или уже состоит в классе."
+              : "User not found or already enrolled."),
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -81,90 +118,112 @@ export const MembersPage: React.FC = () => {
 
   const handleRoleChange = async (memberId: string, newRole: ClassMemberRole) => {
     if (!currentClassroom) return;
-    setError(null);
+    setNotice(null);
     setMessage(null);
     try {
       await apiClient.updateMemberRole(currentClassroom.id, memberId, newRole);
-      setMessage(lang === "ru" ? "Права участника обновлены." : "Member permissions updated.");
+      setMessage(lang === "ru" ? "Роль участника обновлена." : "Member role updated.");
       await fetchMembers();
+      await refreshClassrooms();
     } catch (err: any) {
-      setError(err.message || (lang === "ru" ? "Не удалось изменить роль участника." : "Failed to edit user role."));
+      await refreshClassrooms();
+      await fetchMembers();
+      setNotice({
+        variant: "error",
+        title: lang === "ru" ? "Ошибка изменения роли" : "Role update failed",
+        message:
+          err?.message ||
+          (lang === "ru" ? "Не удалось изменить роль участника." : "Failed to update member role."),
+      });
     }
   };
 
-  const handleRemoveMember = async (memberId: string, memberName: string) => {
+  const handleRemoveMember = (memberId: string, memberName: string) => {
     if (!currentClassroom) return;
-    const isSelf = members.find(m => m.id === memberId)?.user_id === user?.id;
-    
-    let confirmMessage = "";
-    if (isSelf) {
-      confirmMessage = lang === "ru" ? "Вы уверены, что хотите выйти из этой группы?" : "Are you sure you want to leave this classroom group?";
-    } else {
-      confirmMessage = lang === "ru" ? `Вы уверены, что хотите исключить "${memberName}" из этой группы?` : `Are you sure you want to dismiss "${memberName}" from this classroom?`;
-    }
+    const isSelf = members.find((m) => m.id === memberId)?.user_id === user?.id;
+
+    const confirmMessage = isSelf
+      ? lang === "ru"
+        ? "Вы действительно хотите покинуть этот класс?"
+        : "Are you sure you want to leave this classroom?"
+      : lang === "ru"
+      ? `Исключить пользователя «${memberName}» из класса?`
+      : `Remove "${memberName}" from this classroom?`;
 
     setConfirmState({
       message: confirmMessage,
       onConfirm: async () => {
-        setError(null);
+        setNotice(null);
         setMessage(null);
         try {
           await apiClient.removeMember(currentClassroom.id, memberId);
-          setMessage(
-            isSelf 
-              ? (lang === "ru" ? "Вы покинули группу." : "You left the group.") 
-              : (lang === "ru" ? "Участник успешно исключен." : "Member dismissed successfully.")
-          );
           if (isSelf) {
-            window.location.reload();
+            selectClassroom(null);
+            await refreshClassrooms();
           } else {
+            setMessage(lang === "ru" ? "Участник исключен из класса." : "Member removed from classroom.");
             await fetchMembers();
+            await refreshClassrooms();
           }
         } catch (err: any) {
-          setError(err.message || (lang === "ru" ? "Не удалось удалить запись членства." : "Failed to delete membership record."));
+          await refreshClassrooms();
+          setNotice({
+            variant: "error",
+            title: lang === "ru" ? "Действие недоступно" : "Action failed",
+            message:
+              err?.message ||
+              (lang === "ru" ? "Не удалось удалить участника." : "Failed to remove member."),
+          });
         }
-      }
+      },
     });
   };
 
-  const canEvict = (targetRole: ClassMemberRole, targetUserId: string) => {
-    if (targetUserId === user?.id) return true; // Can always leave
-    if (targetRole === "owner") return false;
+  const canEvict = (memberRole: ClassMemberRole, targetUserId: string) => {
+    if (memberRole === "owner") return false;
+    if (targetUserId === user?.id) return true;
     if (isOwner) return true;
-    if (isAdmin) return targetRole === "member";
+    if (isAdmin) return memberRole === "member";
     return false;
+  };
+
+  const getRoleLabel = (r: ClassMemberRole) => {
+    if (r === "owner") return t.owner;
+    if (r === "admin") return t.admin_role;
+    return t.member_role;
   };
 
   if (!currentClassroom) {
     return (
-      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center shadow-sm">
-        <Users className="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-500" />
-        <h3 className="mt-4 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{t.no_classroom_selected}</h3>
-        <p className="mt-2 text-sm text-gray-500 dark:text-zinc-400">{t.pick_classroom_desc}</p>
+      <div className="border-2 border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center">
+        <Users className="mx-auto h-10 w-10 text-zinc-400 dark:text-zinc-500" />
+        <h3 className="mt-4 text-sm font-bold text-zinc-900 dark:text-zinc-100">
+          {t.no_classroom_selected}
+        </h3>
+        <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{t.pick_classroom_desc}</p>
       </div>
     );
   }
 
   return (
-    <div id="members-view-container" className="space-y-6 py-4">
-      {/* Header section */}
-      <div className="border-b-2 border-zinc-200 dark:border-zinc-800 pb-5">
-        <h1 className="text-3xl font-black uppercase tracking-tighter text-zinc-900 dark:text-zinc-50 font-sans flex items-center gap-2.5">
-          <Users className="h-6 w-6 text-black dark:text-white" />
+    <div id="members-view-container" className="space-y-6 py-2">
+      {/* Header */}
+      <div className="border-b border-zinc-200 dark:border-zinc-800 pb-5">
+        <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50 flex items-center gap-2.5">
+          <Users className="h-6 w-6 shrink-0" />
           <span>{t.members_roster_title}</span>
         </h1>
-        <p className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mt-1">
-          {t.manage_roles_desc} <span className="font-black text-black dark:text-white">{currentClassroom.name}</span>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+          {t.manage_roles_desc}{" "}
+          <span className="font-bold text-zinc-900 dark:text-zinc-100">{currentClassroom.name}</span>
         </p>
       </div>
 
-      {error && (
-        <div id="members-error-panel" className="border-2 border-zinc-950 dark:border-red-600 bg-red-50 dark:bg-red-950/40 p-4 text-xs font-black uppercase tracking-wider text-red-600 dark:text-red-300 font-sans">
-          {error}
-        </div>
-      )}
       {message && (
-        <div id="members-success-panel" className="border-2 border-zinc-950 dark:border-green-600 bg-green-50 dark:bg-green-950/40 p-4 text-xs font-black uppercase tracking-wider text-green-700 dark:text-green-300 font-sans">
+        <div
+          id="members-success-panel"
+          className="border-2 border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 p-4 text-xs font-semibold text-emerald-800 dark:text-emerald-300"
+        >
           {message}
         </div>
       )}
@@ -172,12 +231,27 @@ export const MembersPage: React.FC = () => {
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
         {/* Members Roster List */}
         <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-xl font-black uppercase tracking-tighter text-zinc-950 dark:text-zinc-50 font-sans">{t.enrolled_participants}</h2>
-          
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-lg font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
+              {t.enrolled_participants}
+            </h2>
+            <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 tabular-nums">
+              {members.length}
+              {currentClassroom.max_members && currentClassroom.max_members > 0
+                ? ` / ${currentClassroom.max_members}`
+                : ""}
+            </span>
+          </div>
+
           {loading ? (
-            <div className="py-10 text-center text-xs font-black uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{t.loading_roster}</div>
+            <div className="py-12 text-center text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+              {t.loading_roster}
+            </div>
           ) : (
-            <div className="divide-y divide-zinc-200 dark:divide-zinc-850 border-2 border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-none overflow-hidden" id="members-table-list">
+            <div
+              className="divide-y divide-zinc-200 dark:divide-zinc-800 border-2 border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900"
+              id="members-table-list"
+            >
               {members.map((m) => {
                 const isTargetSelf = m.user_id === user?.id;
 
@@ -185,57 +259,73 @@ export const MembersPage: React.FC = () => {
                   <div
                     key={m.id}
                     id={`member-row-${m.id}`}
-                    className="flex items-center justify-between p-4 bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-850 transition-colors"
+                    className="flex items-center justify-between gap-4 p-4 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors"
                   >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-black uppercase tracking-tight text-zinc-900 dark:text-zinc-50">
-                          {m.username} {isTargetSelf && <span className="text-xs text-zinc-400 dark:text-zinc-500 font-bold lowercase italic">({t.you})</span>}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-bold text-zinc-900 dark:text-zinc-50 truncate">
+                          {m.username}
                         </span>
-                        
-                        {/* Static Role Label Badge */}
-                        <span className={`rounded px-2 py-0.5 text-[9px] font-black uppercase ${
-                          m.role === "owner" ? "bg-zinc-950 dark:bg-zinc-250 text-white dark:text-zinc-900 border border-zinc-950 dark:border-zinc-200" :
-                          m.role === "admin" ? "bg-zinc-800 dark:bg-zinc-700 text-white dark:text-zinc-100 border border-zinc-850 dark:border-zinc-600" :
-                          "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700"
-                        }`}>
-                          {m.role === "admin" ? t.admin_role : m.role === "member" ? t.member_role : m.role}
+                        {isTargetSelf && (
+                          <span className="text-xs text-zinc-500 dark:text-zinc-400">({t.you})</span>
+                        )}
+                        <span aria-hidden="true" className="text-zinc-300 dark:text-zinc-600">
+                          ·
+                        </span>
+                        <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+                          {getRoleLabel(m.role)}
                         </span>
                       </div>
-                      <p className="text-[10px] font-bold uppercase text-zinc-400 dark:text-zinc-500 mt-1">
-                        {lang === "ru" ? "Зачислен" : "Enrolled"}: {new Date(m.created_at).toLocaleDateString()}
+                      <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5 tabular-nums">
+                        {lang === "ru" ? "В группе с " : "Joined "}
+                        {new Date(m.created_at).toLocaleDateString(
+                          lang === "ru" ? "ru-RU" : "en-US"
+                        )}
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                      {/* Owner controls: Dropdown to change role */}
-                      {isOwner && !isTargetSelf && m.role !== "owner" ? (
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      {isOwner && !isTargetSelf && m.role !== "owner" && (
                         <select
                           id={`change-role-select-${m.id}`}
                           value={m.role}
-                          onChange={(e) => handleRoleChange(m.id, e.target.value as any)}
-                          className="border-2 border-zinc-200 dark:border-zinc-700 py-1.5 px-2 text-[10px] font-black uppercase tracking-wider bg-zinc-50 dark:bg-zinc-850 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-black dark:focus:border-rose-500 rounded-none cursor-pointer"
+                          onChange={(e) =>
+                            handleRoleChange(m.id, e.target.value as ClassMemberRole)
+                          }
+                          className="border-2 border-zinc-200 dark:border-zinc-700 py-1.5 px-2.5 text-xs font-semibold bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-900 dark:focus:border-zinc-300 cursor-pointer"
                         >
                           <option value="member">{t.member_role}</option>
                           <option value="admin">{t.admin_role}</option>
                         </select>
-                      ) : null}
+                      )}
 
-                      {/* Unified eviction controls */}
-                      {canEvict(m.role, m.user_id) ? (
+                      {canEvict(m.role, m.user_id) && (
                         <button
                           id={`evict-member-btn-${m.id}`}
+                          type="button"
                           onClick={() => handleRemoveMember(m.id, m.username)}
-                          className={`w-8 h-8 flex items-center justify-center border-2 border-black font-black text-sm transition-all cursor-pointer focus:outline-none shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none ${
-                            isTargetSelf 
-                              ? "bg-amber-100 hover:bg-amber-200 text-amber-900" 
-                              : "bg-red-50 hover:bg-red-200 text-red-650"
+                          className={`h-8 px-2.5 inline-flex items-center justify-center gap-1 border text-xs font-bold transition-colors cursor-pointer focus:outline-none whitespace-nowrap ${
+                            isTargetSelf
+                              ? "border-amber-500 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-900 dark:text-amber-200"
+                              : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400"
                           }`}
-                          title={isTargetSelf ? (lang === "ru" ? "Выйти из группы" : "Leave classroom group") : (lang === "ru" ? "Исключить участника" : "Dismiss member")}
+                          title={
+                            isTargetSelf
+                              ? lang === "ru"
+                                ? "Выйти из класса"
+                                : "Leave classroom"
+                              : lang === "ru"
+                              ? "Исключить участника"
+                              : "Remove member"
+                          }
                         >
-                          ×
+                          {isTargetSelf ? (
+                            <span>{lang === "ru" ? "Выйти" : "Leave"}</span>
+                          ) : (
+                            <X className="h-3.5 w-3.5" />
+                          )}
                         </button>
-                      ) : null}
+                      )}
                     </div>
                   </div>
                 );
@@ -244,19 +334,24 @@ export const MembersPage: React.FC = () => {
           )}
         </div>
 
-        {/* Administration Add panel */}
+        {/* Add Member & Role Policies Panel */}
         {canManage && (
           <div className="space-y-4">
-            <h2 className="text-xl font-black uppercase tracking-tighter text-zinc-950 dark:text-zinc-50 font-sans">{t.roster_admin_title}</h2>
-            <div className="border-2 border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.05)]">
-              <div className="flex items-center gap-2 text-zinc-950 dark:text-zinc-50 font-black uppercase tracking-wider text-sm mb-4 font-sans">
-                <UserPlus className="h-5 w-5 text-black dark:text-white" />
+            <h2 className="text-lg font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
+              {t.roster_admin_title}
+            </h2>
+            <div className="border-2 border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
+              <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-50 font-extrabold text-sm mb-4">
+                <UserPlus className="h-4 w-4 shrink-0" />
                 <span>{t.force_add}</span>
               </div>
 
               <form onSubmit={handleAddMember} className="space-y-4">
                 <div>
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 mb-1.5 block">
+                  <label
+                    htmlFor="add-member-username"
+                    className="text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1.5 block"
+                  >
                     {t.existing_username}
                   </label>
                   <input
@@ -266,35 +361,35 @@ export const MembersPage: React.FC = () => {
                     placeholder={t.enter_username_placeholder}
                     value={targetUsername}
                     onChange={(e) => setTargetUsername(e.target.value)}
-                    className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 px-3 text-xs uppercase font-sans tracking-tight focus:border-black dark:focus:border-rose-500 focus:outline-none transition-colors rounded-none placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-bold"
+                    className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 px-3 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
                   />
                 </div>
 
                 {isOwner && (
                   <div>
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 mb-1.5 block">
+                    <label className="text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1.5 block">
                       {t.assigned_role}
                     </label>
-                    <div className="flex gap-6 mt-1 font-black uppercase tracking-wider text-xs">
-                      <label className="flex items-center gap-1.5 text-zinc-900 dark:text-zinc-100 cursor-pointer">
+                    <div className="flex gap-6 mt-1 text-xs font-semibold">
+                      <label className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 cursor-pointer">
                         <input
                           id="add-member-role-member"
                           type="radio"
                           name="add-role"
                           checked={targetRole === "member"}
                           onChange={() => setTargetRole("member")}
-                          className="accent-black dark:accent-rose-500 h-3 w-3 cursor-pointer"
+                          className="accent-zinc-900 dark:accent-zinc-100 h-3.5 w-3.5 cursor-pointer"
                         />
                         <span>{t.member_role}</span>
                       </label>
-                      <label className="flex items-center gap-1.5 text-zinc-900 dark:text-zinc-100 cursor-pointer">
+                      <label className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 cursor-pointer">
                         <input
                           id="add-member-role-admin"
                           type="radio"
                           name="add-role"
                           checked={targetRole === "admin"}
                           onChange={() => setTargetRole("admin")}
-                          className="accent-black dark:accent-rose-500 h-3 w-3 cursor-pointer"
+                          className="accent-zinc-900 dark:accent-zinc-100 h-3.5 w-3.5 cursor-pointer"
                         />
                         <span>{t.admin_role}</span>
                       </label>
@@ -306,24 +401,23 @@ export const MembersPage: React.FC = () => {
                   id="add-member-submit-btn"
                   type="submit"
                   disabled={loading || !targetUsername.trim()}
-                  className="flex w-full items-center justify-center gap-2 bg-black dark:bg-rose-900 py-3 px-4 text-xs font-black uppercase tracking-widest text-white dark:text-rose-100 hover:bg-zinc-800 dark:hover:bg-rose-800 disabled:opacity-40 rounded-none cursor-pointer duration-150 border border-black dark:border-rose-500 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] dark:shadow-[4px_4px_0px_0px_rgba(244,63,94,0.3)] active:translate-x-1 active:translate-y-1 active:shadow-none"
+                  className="flex w-full items-center justify-center gap-2 bg-zinc-900 dark:bg-zinc-100 py-2.5 px-4 text-xs font-bold text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200 disabled:opacity-40 cursor-pointer transition-colors"
                 >
                   <span>{t.instruct_enrollment}</span>
-                  <ArrowRight className="h-4 w-4" />
+                  <ArrowRight className="h-3.5 w-3.5" />
                 </button>
               </form>
             </div>
 
-            {/* Role Helper Info panel */}
-            <div className="bg-zinc-950 dark:bg-zinc-900 text-white p-6 border-2 border-black dark:border-zinc-800 space-y-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] dark:shadow-[4px_4px_0px_0px_rgba(244,63,94,0.3)]">
-              <div className="flex items-center gap-1.5">
-                <ShieldAlert className="h-5 w-5 text-zinc-400 dark:text-zinc-500 shrink-0" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400 dark:text-zinc-500">{t.roster_control_policies}</span>
+            <div className="bg-zinc-900 dark:bg-zinc-900 text-white p-5 border-2 border-zinc-900 dark:border-zinc-800 space-y-3">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-zinc-400 shrink-0" />
+                <span className="text-xs font-bold text-zinc-300">{t.roster_control_policies}</span>
               </div>
-              <ul className="text-xs text-zinc-400 dark:text-zinc-300 leading-relaxed space-y-2 list-none">
-                <li className="flex items-start gap-1"><span className="text-white font-bold ml-1">•</span> {t.policy_one}</li>
-                <li className="flex items-start gap-1"><span className="text-white font-bold ml-1">•</span> {t.policy_two}</li>
-                <li className="flex items-start gap-1"><span className="text-white font-bold ml-1">•</span> {t.policy_three}</li>
+              <ul className="text-xs text-zinc-300 leading-relaxed space-y-2 list-disc pl-4">
+                <li>{t.policy_one}</li>
+                <li>{t.policy_two}</li>
+                <li>{t.policy_three}</li>
               </ul>
             </div>
           </div>
@@ -331,37 +425,48 @@ export const MembersPage: React.FC = () => {
       </div>
 
       {confirmState && (
-        <div id="members-confirm-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white border-4 border-black p-6 w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none duration-150">
-            <h3 className="text-lg font-black uppercase tracking-tight text-zinc-950 font-sans mb-3">
+        <div
+          id="members-confirm-modal"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        >
+          <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-900 dark:border-zinc-700 p-6 w-full max-w-md shadow-xl">
+            <h3 className="text-lg font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50 mb-2">
               {lang === "ru" ? "Подтверждение" : "Confirmation"}
             </h3>
-            <p className="text-xs font-bold text-zinc-600 leading-relaxed uppercase tracking-tight mb-6 select-none">
+            <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed mb-6">
               {confirmState.message}
             </p>
-            <div className="flex gap-4">
+            <div className="flex gap-3">
               <button
                 id="modal-cancel-btn"
+                type="button"
                 onClick={() => setConfirmState(null)}
-                className="flex-1 bg-white border-2 border-black py-2.5 px-4 text-xs font-black uppercase tracking-wider text-black hover:bg-zinc-100 cursor-pointer rounded-none duration-100 active:translate-x-[1px] active:translate-y-[1px]"
+                className="flex-1 bg-white dark:bg-zinc-800 border-2 border-zinc-300 dark:border-zinc-700 py-2.5 px-4 text-xs font-bold text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer"
               >
-                {lang === "ru" ? "Отмена" : "Cancel"}
+                {t.cancel}
               </button>
               <button
                 id="modal-confirm-btn"
+                type="button"
                 onClick={async () => {
                   const cb = confirmState.onConfirm;
                   setConfirmState(null);
                   await cb();
                 }}
-                className="flex-1 bg-red-600 text-white border-2 border-black py-2.5 px-4 text-xs font-black uppercase tracking-wider hover:bg-red-700 cursor-pointer rounded-none duration-100 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+                className="flex-1 bg-red-600 text-white py-2.5 px-4 text-xs font-bold hover:bg-red-700 cursor-pointer"
               >
-                {lang === "ru" ? "Да, продолжить" : "Yes, proceed"}
+                {lang === "ru" ? "Подтвердить" : "Confirm"}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      <NoticeModal
+        notice={notice}
+        onClose={() => setNotice(null)}
+        defaultActionLabel={lang === "ru" ? "Понятно" : "Got it"}
+      />
     </div>
   );
 };

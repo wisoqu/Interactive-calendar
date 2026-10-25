@@ -1,35 +1,39 @@
-# Multi-stage Dockerfile for School Calendar (Express + Vite + SQLite)
+# Multi-stage Dockerfile for Interactive School Calendar (Express + React + SQLite)
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy dependency manifests
-COPY package*.json ./
+# Native build toolchain for better-sqlite3 across x86_64 and ARM64 VPS
+RUN apk add --no-cache python3 make g++
 
-# Install all dependencies required for building
+# Copy dependency manifests and install dependencies
+COPY package*.json ./
 RUN npm ci
 
-# Copy source code
+# Copy application source and compile frontend + server bundle
 COPY . .
+RUN npm run build && npm prune --omit=dev
 
-# Build frontend & backend (runs `vite build` and `esbuild server.ts --outfile=dist/server.cjs`)
-RUN npm run build
-
-# Production runner image
+# Production runtime image
 FROM node:20-alpine AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV SQLITE_DB_PATH=/app/data/calendar_db.sqlite
 
-# Copy build output and dependencies
+# Ensure persistent SQLite directory exists
+RUN mkdir -p /app/data
+
+# Copy production build output and pruned runtime dependencies
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 
-# Expose application port
 EXPOSE 3000
 
-# Run production server
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
+
 CMD ["npm", "start"]

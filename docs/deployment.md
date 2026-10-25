@@ -1,96 +1,52 @@
-# Deployment - Interactive Calendar
+# Deployment Guide - Interactive Calendar
 
-This document illustrates the configurations required to package, configure, and boot the Interactive Calendar monorepo securely.
+This document describes the production container packaging, environment configuration, persistent SQLite volume mounting, and HTTPS reverse proxy setup.
 
-## 1. Local and Production Configurations
+## 1. Environment Variables (`.env`)
 
-The application relies on standard Environment variables to define secure database paths, port layouts, and secret stores.
-
-### Root `.env` Configurations
-
-```cfg
-# Server Environment
-ENV=production
+```dotenv
+NODE_ENV=production
 PORT=3000
+SQLITE_DB_PATH=/app/data/calendar_db.sqlite
 
-# Backend Credentials & Secret Keys
-SECRET_KEY="A_VERY_LONG_CRYPTOGRAPHIC_PASSWORD_SIGNING_SECRET"
-GEMINI_API_KEY="AI_STUDIO_INJECTED_OR_MANUAL_SECRET"
-
-# Database Configuration (Postgre)
-DATABASE_URL="postgresql://postgres:postgres_secret_password@db:5432/classroom_calendar"
-
-# Mail/SMTP Setup (For code dispatch, can mock in simple setups)
-SMTP_HOST="smtp.mailtrap.io"
-SMTP_PORT=2525
-SMTP_USERNAME="smtp_mock_user"
-SMTP_PASSWORD="smtp_mock_password"
-SENDER_EMAIL="noreply@classroomcalendar.org"
+# Optional SMTP settings for 6-digit password reset emails
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your_account@gmail.com
+SMTP_PASS=your_16_char_app_password
+SMTP_FROM="Школьный календарь <your_account@gmail.com>"
+SMTP_SECURE=false
 ```
 
-## 2. Docker Compose Layout
+## 2. Docker & Persistent SQLite Volume (`docker-compose.yml`)
 
-We package the PostgreSQL instance, Python FastAPI server, and a prebuilt Static Site server of the React frontend within a multi-container Docker Network.
+SQLite in `WAL` mode creates companion `-wal` and `-shm` files alongside `calendar_db.sqlite`. Therefore, `docker-compose.yml` mounts the `./data` **directory** (rather than a single file) to `/app/data`:
 
 ```yaml
-version: '3.8'
-
 services:
-  db:
-    image: postgres:15-alpine
-    container_name: calendar_postgres
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_secret_password
-      POSTGRES_DB: classroom_calendar
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  backend:
+  app:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
-    container_name: calendar_fastapi
-    restart: always
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      - ENV=production
-      - DATABASE_URL=postgresql://postgres:postgres_secret_password@db:5432/classroom_calendar
-      - SECRET_KEY=A_VERY_LONG_CRYPTOGRAPHIC_PASSWORD_SIGNING_SECRET
-    ports:
-      - "8000:8000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: calendar_nginx
-    restart: always
+    container_name: school_calendar_app
+    restart: unless-stopped
     ports:
       - "3000:3000"
-    depends_on:
-      - backend
-
-volumes:
-  postgres_data:
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - SQLITE_DB_PATH=/app/data/calendar_db.sqlite
+    volumes:
+      - ./data:/app/data
 ```
 
-## 3. Automation and Migrations
+## 3. One-Command Automated Setup (`install.sh`)
 
-*   **Alembic Migrations**: Mounted at container boot inside the `backend/` execution container. When the server powers on, it waits for PostgreSQL to reply to health checks, then executes `alembic upgrade head` before serving FastAPI routes.
-*   **Vite Single Line Builds**: Built during construction layer inside a Node compilation container and stuffed cleanly into a lightweight Nginx container serving standard static routing rules with SPA fallbacks.
+On Ubuntu/Debian servers, `install.sh` automates:
+1. Checking available RAM and optionally provisioning a 2 GB `/swapfile` on low-memory VPS instances.
+2. Installing `git`, `curl`, `docker`, and `docker-compose-plugin` if missing.
+3. Cloning the repository into `/opt/interactive-calendar` and generating `.env`.
+4. Building and starting the container via `docker compose up -d --build` and verifying `/api/health`.
+5. Optionally configuring Nginx + Certbot (`Let's Encrypt`) to serve the application over HTTPS on port `443` with `X-Forwarded-Proto` headers.

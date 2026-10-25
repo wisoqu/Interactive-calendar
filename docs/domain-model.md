@@ -1,88 +1,91 @@
 # Domain Model - Interactive Calendar
 
-This document defines the core domain model, entities, relations, value objects, and business rules for the Interactive Calendar application.
+This document defines the core domain model, entities, roles, and business invariants implemented in the Interactive Calendar application (`server.ts` + SQLite).
 
 ## 1. Entities
 
-### User
-Represents an individual who can authenticate and participate in groups.
-*   `id`: unique string/UUID identifier.
-*   `username`: unique, alphanumeric username. Required.
-*   `email`: optional string representation, validated. Required only for password resets.
-*   `password_hash`: secure cryptographic password representation.
-*   `created_at`: timestamp of account creation.
+### User (`users`)
+Represents an individual who can authenticate and participate in school classrooms/groups.
+* `id`: unique string identifier (`usr_...`).
+* `username`: unique username (3–50 characters, case-insensitive uniqueness). Required.
+* `email`: optional email address (case-insensitive uniqueness when set). Required for email password recovery.
+* `password_hash`: PBKDF2-SHA256 salted password hash (`pbkdf2_sha256$100000$<salt>$<hash>`).
+* `created_at`: UTC ISO-8601 timestamp of account creation.
 
-### Classroom
-An academic class, extracurricular club, or school group containing events and members.
-*   `id`: unique string/UUID identifier.
-*   `name`: display name of the group. Required.
-*   `description`: optional text description.
-*   `owner_id`: references the creating User who is the group's "owner".
-*   `invite_code`: unique, alphanumeric code that provides join rights.
-*   `created_at`: timestamp of classroom creation.
-*   `updated_at`: timestamp of last details edit.
+### Classroom (`classrooms`)
+An academic class, club, or school group containing events and members.
+* `id`: unique string identifier (`cr_...`).
+* `name`: display name of the classroom (2–100 characters). Required.
+* `description`: optional text description.
+* `owner_id`: references the creating `User` who holds the `owner` role.
+* `invite_code`: unique 6-character alphanumeric code used to join the group.
+* `is_closed`: boolean flag (`0` / `1` in SQLite). When enabled, joining via invite code is blocked.
+* `max_members`: integer capacity limit (`0` = unlimited). When `> 0`, new enrollments are blocked once current member count reaches `max_members`.
+* `created_at`: UTC ISO-8601 timestamp of classroom creation.
+* `updated_at`: UTC ISO-8601 timestamp of last settings update.
 
-### ClassMember
-A specific association mapping a User to a Classroom, with role-based attributes.
-*   `id`: unique association identifier.
-*   `user_id`: references User.
-*   `classroom_id`: references Classroom.
-*   `role`: MemberRole value (`owner`, `admin`, `member`).
-*   `created_at`: timestamp of membership enrollment.
-*   *Constraint*: Unique combination of `(user_id, classroom_id)`.
+### ClassMember (`members`)
+Maps a `User` to a `Classroom` with a specific access role.
+* `id`: unique association identifier (`mem_...`).
+* `user_id`: references `User`.
+* `classroom_id`: references `Classroom`.
+* `role`: `MemberRole` (`owner` | `admin` | `member`).
+* `created_at`: UTC ISO-8601 timestamp of enrollment.
+* *Constraint*: Unique pair `(user_id, classroom_id)`.
 
-### Event
-An event occurring within a specific group.
-*   `id`: unique event identifier.
-*   `classroom_id`: references Classroom.
-*   `creator_id`: references User.
-*   `title`: event title. Required.
-*   `description`: optional event description.
-*   `starts_at`: UTC timestamp indicating event start.
-*   `ends_at`: UTC timestamp indicating event end.
-*   `created_at`: timestamp of event creation.
-*   `updated_at`: timestamp of last event edit.
+### Event (`events`)
+A scheduled school event occurring within a specific classroom.
+* `id`: unique identifier (`ev_...`).
+* `classroom_id`: references `Classroom`.
+* `creator_id`: references `User` who created the event.
+* `title`: event title (2–150 characters). Required.
+* `description`: optional event details/notes.
+* `starts_at`: UTC ISO-8601 timestamp of event start.
+* `ends_at`: UTC ISO-8601 timestamp of event end.
+* `created_at`: UTC ISO-8601 timestamp of event creation.
+* `updated_at`: UTC ISO-8601 timestamp of last edit.
 
-### UserSession
-Represents an active server-side authentication session.
-*   `id`: unique database key.
-*   `session_id`: unguessable secure token sent to the user as a cookie.
-*   `user_id`: references User.
-*   `created_at`: timestamp of login.
-*   `expires_at`: timestamp when the session expires.
-*   `revoked_at`: optional timestamp set when logged out or after password resets.
+### UserSession (`sessions`)
+Represents a server-side authentication session transmitted via an `HttpOnly` cookie.
+* `id`: unique database key (`sid_...`).
+* `session_id`: cryptographically random token (`sess_...`) stored in the `session_id` cookie.
+* `user_id`: references `User`.
+* `created_at`: UTC ISO-8601 login timestamp.
+* `expires_at`: UTC ISO-8601 expiration timestamp (7 days).
+* `revoked_at`: optional UTC ISO-8601 timestamp set upon logout or password reset.
 
-### PasswordResetCode
-One-time email reset token.
-*   `id`: unique identifier.
-*   `user_id`: references User.
-*   `code_hash`: SHA-256 hash of the verification code sent to the email.
-*   `expires_at`: expiration window (e.g., 15 minutes).
-*   `used_at`: timestamp of usage.
-*   `created_at`: timestamp of code request.
+### PasswordResetCode (`reset_codes`)
+One-time 6-digit email verification code for password recovery.
+* `id`: unique identifier (`rst_...`).
+* `user_id`: references `User`.
+* `code_hash`: SHA-256 hex digest of the 6-digit verification code (raw code is never stored in SQLite).
+* `expires_at`: UTC ISO-8601 expiration timestamp (15 minutes from creation).
+* `used_at`: optional UTC ISO-8601 timestamp set once consumed.
+* `created_at`: UTC ISO-8601 request timestamp.
 
 ---
 
-## 2. Value Objects and Enums
+## 2. Roles (`MemberRole`)
 
-### MemberRole (Enum)
-Defines roles within a classroom:
-*   `owner`: Full administrative privileges, including classroom deletion and member/role management.
-*   `admin`: Classroom editing, event management (CRUD), and non-owner member removal.
-*   `member`: Base level permission. Can view events and roster.
+* `owner`: Full privileges over the classroom, including updating settings (`name`, `description`, `is_closed`, `max_members`), promoting/demoting `admin`s, managing events, removing members, and deleting the classroom.
+* `admin`: Event management (create, edit, delete), adding `member`s by username, and removing regular `member`s. Cannot modify classroom settings or manage `owner` / other `admin`s.
+* `member`: Read-only access to the classroom calendar, event details, and member list; can leave the classroom at any time.
 
 ---
 
 ## 3. Core Business Invariants & Policies
 
-1.  **Unique Relationships**: A user can join a classroom only once. Any duplicate join attempt must be blocked.
-2.  **Explicit Ownership**: A classroom must have exactly one Owner. The owner's membership cannot be deleted, and their role cannot be changed unless ownership is transferred or the classroom is deleted.
-3.  **Role Hierarchy Security**:
-    *   `member` cannot perform CRUD operations on events or classrooms.
-    *   `admin` can manage events but cannot modify classroom configuration (`name`, `description`, `invite_code`).
-    *   `admin` cannot modify or delete the `owner` or other `admin`s.
-4.  **DateTime Consistency**:
-    *   `ends_at` must always be strictly greater than `starts_at`.
-    *   All timestamps must be recorded and stored in **UTC**.
-5.  **Session Revocation Policy**:
-    *   Upon a successful password reset, all active sessions for that user are immediately revoked by setting `revoked_at` to the current time.
+1. **Single Enrollment per Classroom**: A user can belong to a classroom at most once (`UNIQUE(user_id, classroom_id)`).
+2. **Explicit Ownership**: Every classroom has a single `owner`. The owner cannot leave or be removed from their own classroom; to disband the group, the owner deletes the classroom (which cascades to its events and memberships).
+3. **Strict Role Hierarchy**:
+   * `member` cannot create, edit, or delete events, members, or classroom settings.
+   * `admin` cannot modify classroom settings (`PATCH /api/classrooms/:id`), cannot assign the `admin` role, and cannot remove the `owner` or another `admin`.
+   * Only `owner` can modify classroom settings, change member roles (`member <-> admin`), or delete the classroom.
+4. **Join & Capacity Controls**:
+   * When `is_closed = true`, joining via `invite_code` is rejected (`403`).
+   * When `max_members > 0` and member count `>= max_members`, both code-joining and manual member addition are rejected (`403`).
+5. **DateTime Consistency**:
+   * `ends_at` must be strictly later than `starts_at`.
+   * Timestamps are normalized and persisted in **UTC** ISO-8601 format.
+6. **Session Revocation on Password Reset**:
+   * Confirming a password reset marks the verification code as used and immediately revokes all active sessions of that user (`revoked_at`).
