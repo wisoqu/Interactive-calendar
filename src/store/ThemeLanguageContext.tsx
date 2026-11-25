@@ -415,6 +415,10 @@ export const ThemeLanguageProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   useEffect(() => {
+    window.document.documentElement.lang = lang;
+  }, [lang]);
+
+  useEffect(() => {
     const root = window.document.documentElement;
     if (theme === "dark") {
       root.classList.add("dark");

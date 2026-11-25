@@ -6,12 +6,11 @@ services:
     container_name: school_calendar_app
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${BIND_HOST:-0.0.0.0}:${PORT:-3000}:${PORT:-3000}"
     env_file:
       - .env
     environment:
       - NODE_ENV=production
-      - PORT=3000
       - SQLITE_DB_PATH=/app/data/calendar_db.sqlite
     volumes:
       # Mount a directory (not a single file) so SQLite WAL/SHM files work reliably

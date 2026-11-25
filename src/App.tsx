@@ -1,52 +1,99 @@
-import React, { useState } from "react";
-import { AuthProvider, useAuth } from "./store/AuthContext";
-import { ThemeLanguageProvider, useThemeLanguage } from "./store/ThemeLanguageContext";
-import { AuthPage } from "./pages/AuthPage";
-import { HomePage } from "./pages/HomePage";
-import { CalendarPage } from "./pages/CalendarPage";
-import { MembersPage } from "./pages/MembersPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { Classroom } from "./types";
+import React, { useEffect, useRef, useState } from "react";
+import { AuthProvider, useAuth } from "./store/AuthContext.tsx";
+import { ThemeLanguageProvider, useThemeLanguage } from "./store/ThemeLanguageContext.tsx";
+import { AuthPage } from "./pages/AuthPage.tsx";
+import { HomePage } from "./pages/HomePage.tsx";
+import { CalendarPage } from "./pages/CalendarPage.tsx";
+import { MembersPage } from "./pages/MembersPage.tsx";
+import { SettingsPage } from "./pages/SettingsPage.tsx";
+import type { Classroom } from "./types.ts";
 import {
   Calendar,
-  Users,
-  Settings as SettingsIcon,
+  ChevronDown,
   Home,
   LogOut,
-  ChevronDown,
-  User,
-  Sun,
   Moon,
+  Settings as SettingsIcon,
+  Sun,
+  User,
+  Users,
 } from "lucide-react";
 
 type ActiveTab = "home" | "calendar" | "members" | "settings";
 
-const ClassroomDashboard: React.FC = () => {
-  const { user, classrooms, currentClassroom, selectClassroom, refreshClassrooms, logout } = useAuth();
-  const { lang, setLang, theme, setTheme, t } = useThemeLanguage();
-  const [activeTab, setActiveTab] = useState<ActiveTab>("home");
-  const [classDropdownOpen, setClassDropdownOpen] = useState(false);
+function parseHashRoute(): { tab: ActiveTab; classroomId: string | null } {
+  const hash = window.location.hash || "";
+  const match = hash.match(/^#\/classroom\/([^/]+)\/(calendar|members|settings)$/);
+  if (match) {
+    return {
+      classroomId: decodeURIComponent(match[1]),
+      tab: match[2] as ActiveTab,
+    };
+  }
+  return { tab: "home", classroomId: null };
+}
 
-  React.useEffect(() => {
+function buildHashRoute(tab: ActiveTab, classroomId: string | null): string {
+  if (tab !== "home" && classroomId) {
+    return `#/classroom/${encodeURIComponent(classroomId)}/${tab}`;
+  }
+  return "#/home";
+}
+
+const ClassroomDashboard: React.FC = () => {
+  const { user, classrooms, currentClassroom, selectClassroom, logout } = useAuth();
+  const { lang, setLang, theme, setTheme, t } = useThemeLanguage();
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => parseHashRoute().tab);
+  const [classDropdownOpen, setClassDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  // Close classroom dropdown on Escape or outside click
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setClassDropdownOpen(false);
       }
     };
+    const handleMouseDown = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setClassDropdownOpen(false);
+      }
+    };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleMouseDown);
+    };
   }, []);
 
-  // Keep classroom settings, member count, and current user role synchronized across tab switches
-  React.useEffect(() => {
-    if (user) {
-      refreshClassrooms();
+  // Respond to browser Back / Forward hash navigation
+  useEffect(() => {
+    const handleHashChange = () => {
+      const parsed = parseHashRoute();
+      setActiveTab(parsed.tab);
+      if (parsed.classroomId) {
+        const match = classrooms.find((c) => c.id === parsed.classroomId);
+        if (match && match.id !== currentClassroom?.id) {
+          selectClassroom(match);
+        }
+      }
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, [classrooms, currentClassroom?.id, selectClassroom]);
+
+  // Keep URL hash synchronized with current tab & classroom
+  useEffect(() => {
+    const targetHash = buildHashRoute(activeTab, currentClassroom?.id ?? null);
+    if (window.location.hash !== targetHash) {
+      window.history.pushState(null, "", targetHash);
     }
-  }, [activeTab, user?.id, refreshClassrooms]);
+  }, [activeTab, currentClassroom?.id]);
 
   // Reset tab if current classroom changes and user is no longer owner on Settings tab
-  React.useEffect(() => {
-    if (activeTab === "settings" && currentClassroom?.user_role !== "owner") {
+  useEffect(() => {
+    if (activeTab === "settings" && currentClassroom && currentClassroom.user_role !== "owner") {
       setActiveTab("home");
     }
   }, [activeTab, currentClassroom]);
@@ -97,11 +144,11 @@ const ClassroomDashboard: React.FC = () => {
 
             {/* Classroom Switcher */}
             {user && classrooms.length > 0 && (
-              <div className="relative">
+              <div className="relative" ref={dropdownRef}>
                 <button
                   id="classroom-switcher-btn"
                   type="button"
-                  onClick={() => setClassDropdownOpen(!classDropdownOpen)}
+                  onClick={() => setClassDropdownOpen((prev) => !prev)}
                   className="inline-flex items-center gap-2 border-2 border-zinc-900 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 py-1.5 px-3 text-xs font-bold text-zinc-900 dark:text-zinc-100 transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <span className="text-zinc-500 dark:text-zinc-400">{t.group}:</span>

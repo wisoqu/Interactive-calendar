@@ -1,8 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "experimentalDecorators": true,
-    "useDefineForClassFields": false,
+    "strict": true,
     "module": "ESNext",
     "lib": [
       "ES2022",
@@ -13,7 +12,6 @@
     "moduleResolution": "bundler",
     "isolatedModules": true,
     "moduleDetection": "force",
-    "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
       "@/*": [
@@ -22,5 +20,12 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": [
+    "server.ts",
+    "server",
+    "src",
+    "tests",
+    "vite.config.ts"
+  ]
 }
