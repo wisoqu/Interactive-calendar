@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export DEBIAN_FRONTEND=noninteractive
+
 # Цветовое оформление вывода
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -52,11 +54,55 @@ prompt_secret() {
   printf -v "$var_name" '%s' "$input_val"
 }
 
-escape_env_val() {
+# Экранирование значений для .env (совместимо с Docker Compose v2 и dotenv)
+format_env_val() {
   local val="$1"
-  val="${val//\\/\\\\}"
-  val="${val//\"/\\\"}"
-  printf '"%s"' "$val"
+  if [[ "$val" =~ ^[a-zA-Z0-9._@:/+-]+$ ]]; then
+    printf '%s' "$val"
+  else
+    val="${val//\\/\\\\}"
+    val="${val//\"/\\\"}"
+    printf '"%s"' "$val"
+  fi
+}
+
+# Нормализация и проверка доменного имени
+normalize_domain() {
+  local raw="$1"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  raw="${raw#http://}"
+  raw="${raw#https://}"
+  raw="${raw%%/*}"
+  raw="${raw%%:*}"
+  raw="${raw,,}"
+  printf '%s' "$raw"
+}
+
+is_valid_domain() {
+  local dom="$1"
+  [[ "$dom" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+}
+
+# Обновление или добавление ключа в .env
+set_env_key() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp_file
+  tmp_file="$(mktemp)"
+  if [ -f "$file" ]; then
+    awk -v k="$key" -v v="$value" '
+      BEGIN { replaced = 0 }
+      $0 ~ ("^" k "=") { print k "=" v; replaced = 1; next }
+      { print }
+      END { if (!replaced) print k "=" v }
+    ' "$file" > "$tmp_file"
+  else
+    printf '%s=%s\n' "$key" "$value" > "$tmp_file"
+  fi
+  mv "$tmp_file" "$file"
+  chmod 600 "$file"
 }
 
 echo -e "${CYAN}=================================================================${NC}"
@@ -89,7 +135,7 @@ if [ -f /proc/meminfo ]; then
     echo -e "${YELLOW}  На сервере менее 2 ГБ ОЗУ и не настроен SWAP.${NC}"
     echo -e "  Для быстрой и безошибочной сборки проекта на недорогом VPS рекомендуется добавить 2 ГБ SWAP."
     prompt_input "${YELLOW}  [НЕОБЯЗАТЕЛЬНО] Создать файл подкачки SWAP (2 ГБ)? [Y/n]: ${NC}" CREATE_SWAP "Y"
-    if [[ "$CREATE_SWAP" =~ ^[YyДд]$ ]]; then
+    if [[ "$CREATE_SWAP" =~ ^[YyДд] ]]; then
       if [ ! -f /swapfile ]; then
         echo -e "  Создание /swapfile (2 ГБ)..."
         if $SUDO fallocate -l 2G /swapfile 2>/dev/null || $SUDO dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; then
@@ -131,7 +177,7 @@ fi
 if ! command -v docker >/dev/null 2>&1; then
   echo -e "${YELLOW}  Docker не установлен на этом сервере.${NC}"
   prompt_input "${YELLOW}  [ОБЯЗАТЕЛЬНО] Установить Docker автоматически с официального сайта? [Y/n]: ${NC}" INSTALL_DOCKER "Y"
-  if [[ "$INSTALL_DOCKER" =~ ^[YyДд]$ ]]; then
+  if [[ "$INSTALL_DOCKER" =~ ^[YyДд] ]]; then
     curl -fsSL https://get.docker.com | $SUDO sh
     if command -v systemctl >/dev/null 2>&1; then
       $SUDO systemctl enable --now docker || true
@@ -140,6 +186,10 @@ if ! command -v docker >/dev/null 2>&1; then
   else
     echo -e "${RED}Установка прервана: для работы приложения необходим Docker.${NC}"
     exit 1
+  fi
+else
+  if command -v systemctl >/dev/null 2>&1; then
+    $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
   fi
 fi
 
@@ -150,21 +200,29 @@ fi
 
 COMPOSE_CMD=""
 if $DOCKER_PREFIX docker compose version >/dev/null 2>&1; then
-  COMPOSE_CMD="$DOCKER_PREFIX docker compose"
+  COMPOSE_CMD="${DOCKER_PREFIX:+$DOCKER_PREFIX }docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE_CMD="$DOCKER_PREFIX docker-compose"
+  COMPOSE_CMD="${DOCKER_PREFIX:+$DOCKER_PREFIX }docker-compose"
 else
   if command -v apt-get >/dev/null 2>&1; then
-    echo -e "  Устанавливаем плагин docker-compose-plugin..."
+    echo -e "  Устанавливаем плагин Docker Compose..."
     $SUDO apt-get update -qq
-    $SUDO apt-get install -y -qq docker-compose-plugin
-    COMPOSE_CMD="$DOCKER_PREFIX docker compose"
+    if $SUDO apt-get install -y -qq docker-compose-plugin >/dev/null 2>&1 && $DOCKER_PREFIX docker compose version >/dev/null 2>&1; then
+      COMPOSE_CMD="${DOCKER_PREFIX:+$DOCKER_PREFIX }docker compose"
+    elif $SUDO apt-get install -y -qq docker-compose-v2 >/dev/null 2>&1 && $DOCKER_PREFIX docker compose version >/dev/null 2>&1; then
+      COMPOSE_CMD="${DOCKER_PREFIX:+$DOCKER_PREFIX }docker compose"
+    elif $SUDO apt-get install -y -qq docker-compose >/dev/null 2>&1 && command -v docker-compose >/dev/null 2>&1; then
+      COMPOSE_CMD="${DOCKER_PREFIX:+$DOCKER_PREFIX }docker-compose"
+    else
+      echo -e "${RED}Ошибка: не удалось автоматически установить Docker Compose. Установите docker-compose-plugin вручную.${NC}"
+      exit 1
+    fi
   else
     echo -e "${RED}Ошибка: плагин Docker Compose не найден. Установите docker-compose-plugin.${NC}"
     exit 1
   fi
 fi
-echo -e "${GREEN}  ✓ Все необходимые инструменты готовы.${NC}"
+echo -e "${GREEN}  ✓ Все необходимые инструменты готовы (${COMPOSE_CMD}).${NC}"
 echo ""
 
 # ------------------------------------------------------------------------------
@@ -175,7 +233,10 @@ prompt_input "${YELLOW}  [ОБЯЗАТЕЛЬНО] Папка установки 
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo -e "  Папка $INSTALL_DIR уже содержит репозиторий. Обновляем код..."
-  $SUDO git -C "$INSTALL_DIR" pull --ff-only
+  if [ -n "$SUDO" ]; then
+    $SUDO chown -R "$(id -u):$(id -g)" "$INSTALL_DIR"
+  fi
+  git -c "safe.directory=$INSTALL_DIR" -C "$INSTALL_DIR" pull --ff-only
 elif [ -d "$INSTALL_DIR" ] && [ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
   echo -e "${YELLOW}  Папка $INSTALL_DIR уже существует и не пуста — используем текущие файлы.${NC}"
 else
@@ -200,7 +261,7 @@ echo -e "${GREEN}[4/6] Настройка параметров окружени�
 CONFIGURE_ENV="Y"
 if [ -f .env ]; then
   prompt_input "${YELLOW}  Файл .env уже существует. Перенастроить его заново? [y/N]: ${NC}" RECONFIG_ENV "N"
-  if [[ ! "$RECONFIG_ENV" =~ ^[YyДд]$ ]]; then
+  if [[ ! "$RECONFIG_ENV" =~ ^[YyДд] ]]; then
     CONFIGURE_ENV="N"
     echo -e "  Сохранена текущая конфигурация .env."
   fi
@@ -212,8 +273,8 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
   echo -e "  Этот шаг ${BOLD}НЕОБЯЗАТЕЛЕН${NC}: если нажать Enter, календарь будет полностью работать,"
   echo -e "  но отправка 6-значных кодов сброса пароля на почту будет отключена."
   echo -e "  Подсказка по популярным почтовым сервисам (нужен «Пароль приложения»!):"
-  echo -e "    • Gmail:  SMTP Host = ${BOLD}smtp.gmail.com${NC},  Port = ${BOLD}587${NC}"
-  echo -e "    • Яндекс: SMTP Host = ${BOLD}smtp.yandex.ru${NC},  Port = ${BOLD}465${NC}"
+  echo -e "    • Gmail:   SMTP Host = ${BOLD}smtp.gmail.com${NC},   Port = ${BOLD}587${NC}"
+  echo -e "    • Яндекс:  SMTP Host = ${BOLD}smtp.yandex.ru${NC},  Port = ${BOLD}465${NC}"
   echo -e "    • Mail.ru: SMTP Host = ${BOLD}smtp.mail.ru${NC},    Port = ${BOLD}465${NC}"
   echo ""
 
@@ -225,7 +286,14 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
       default_smtp_port="465"
     fi
 
-    prompt_input "${YELLOW}  [ОБЯЗАТЕЛЬНО для почты] SMTP Port [Enter = ${default_smtp_port}]: ${NC}" smtp_port "$default_smtp_port"
+    smtp_port=""
+    while true; do
+      prompt_input "${YELLOW}  [ОБЯЗАТЕЛЬНО для почты] SMTP Port [Enter = ${default_smtp_port}]: ${NC}" smtp_port "$default_smtp_port"
+      if [[ "$smtp_port" =~ ^[0-9]+$ ]] && [ "$smtp_port" -ge 1 ] && [ "$smtp_port" -le 65535 ]; then
+        break
+      fi
+      echo -e "${RED}  Введите корректный номер порта (от 1 до 65535).${NC}"
+    done
 
     smtp_user=""
     while [ -z "$smtp_user" ]; do
@@ -249,12 +317,13 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
     {
       echo "NODE_ENV=production"
       echo "PORT=${APP_PORT}"
+      echo "BIND_HOST=0.0.0.0"
       echo "SQLITE_DB_PATH=/app/data/calendar_db.sqlite"
-      echo "SMTP_HOST=$(escape_env_val "$smtp_host")"
+      echo "SMTP_HOST=$(format_env_val "$smtp_host")"
       echo "SMTP_PORT=${smtp_port}"
-      echo "SMTP_USER=$(escape_env_val "$smtp_user")"
-      echo "SMTP_PASS=$(escape_env_val "$smtp_pass")"
-      echo "SMTP_FROM=$(escape_env_val "$smtp_from")"
+      echo "SMTP_USER=$(format_env_val "$smtp_user")"
+      echo "SMTP_PASS=$(format_env_val "$smtp_pass")"
+      echo "SMTP_FROM=$(format_env_val "$smtp_from")"
       echo "SMTP_SECURE=${smtp_secure}"
     } > .env
     chmod 600 .env
@@ -263,6 +332,7 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
     {
       echo "NODE_ENV=production"
       echo "PORT=${APP_PORT}"
+      echo "BIND_HOST=0.0.0.0"
       echo "SQLITE_DB_PATH=/app/data/calendar_db.sqlite"
       echo "SMTP_HOST="
       echo "SMTP_PORT=587"
@@ -275,6 +345,14 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
     echo -e "${YELLOW}  Настройка почты пропущена (вы всегда сможете заполнить ${INSTALL_DIR}/.env позже).${NC}"
   fi
 fi
+
+# Считываем PORT из существующего .env, если он был переопределён
+if [ -f .env ]; then
+  ENV_PORT=$(awk -F= '/^PORT=/{gsub(/["[:space:]]/, "", $2); print $2; exit}' .env || true)
+  if [[ "$ENV_PORT" =~ ^[0-9]+$ ]] && [ "$ENV_PORT" -ge 1 ] && [ "$ENV_PORT" -le 65535 ]; then
+    APP_PORT="$ENV_PORT"
+  fi
+fi
 echo ""
 
 # ------------------------------------------------------------------------------
@@ -285,7 +363,7 @@ $COMPOSE_CMD up -d --build
 
 echo -n "  Ожидание запуска веб-сервера"
 APP_READY="0"
-for _ in $(seq 1 25); do
+for _ in $(seq 1 30); do
   if curl -fsS "http://127.0.0.1:${APP_PORT}/api/health" >/dev/null 2>&1; then
     APP_READY="1"
     break
@@ -298,7 +376,7 @@ echo ""
 if [ "$APP_READY" = "1" ]; then
   echo -e "${GREEN}  ✓ Сервер и база данных SQLite успешно запущены на порту ${APP_PORT}!${NC}"
 else
-  echo -e "${YELLOW}  ! Контейнер еще запускается. Проверить логи можно командой: cd ${INSTALL_DIR} && docker compose logs -f${NC}"
+  echo -e "${YELLOW}  ! Контейнер еще запускается. Проверить логи можно командой: cd ${INSTALL_DIR} && ${COMPOSE_CMD} logs -f${NC}"
 fi
 echo ""
 
@@ -307,8 +385,23 @@ echo ""
 # ------------------------------------------------------------------------------
 echo -e "${GREEN}[6/6] Настройка домена и защищенного HTTPS-соединения (порт 443)...${NC}"
 echo -e "  Если у вас есть домен, направленный A-записью на IP этого сервера,"
-echo -e "  скрипт автоматически настроит Nginx и выпустит бесплатный SSL-сертификат Let's Encrypt."
-prompt_input "${YELLOW}  [НЕОБЯЗАТЕЛЬНО] Введите ваш домен (или нажмите Enter для работы по IP:${APP_PORT}): ${NC}" DOMAIN_NAME ""
+echo -e "  скрипт автоматически настроит Nginx, закроет прямой внешний доступ к порту ${APP_PORT}"
+echo -e "  и выпустит бесплатный SSL-сертификат Let's Encrypt."
+
+DOMAIN_NAME=""
+while true; do
+  prompt_input "${YELLOW}  [НЕОБЯЗАТЕЛЬНО] Введите ваш домен (или нажмите Enter для работы по IP:${APP_PORT}): ${NC}" RAW_DOMAIN ""
+  if [ -z "$RAW_DOMAIN" ]; then
+    DOMAIN_NAME=""
+    break
+  fi
+  NORMALIZED_DOMAIN="$(normalize_domain "$RAW_DOMAIN")"
+  if is_valid_domain "$NORMALIZED_DOMAIN"; then
+    DOMAIN_NAME="$NORMALIZED_DOMAIN"
+    break
+  fi
+  echo -e "${RED}  Некорректное доменное имя «${RAW_DOMAIN}». Пример: calendar.school42.ru (или нажмите Enter, чтобы пропустить).${NC}"
+done
 
 FINAL_URL=""
 if [ -n "$DOMAIN_NAME" ]; then
@@ -318,6 +411,10 @@ if [ -n "$DOMAIN_NAME" ]; then
     echo -e "  Установка Nginx и Certbot..."
     $SUDO apt-get update -qq
     $SUDO apt-get install -y -qq nginx certbot python3-certbot-nginx
+
+    if command -v systemctl >/dev/null 2>&1; then
+      $SUDO systemctl enable --now nginx >/dev/null 2>&1 || true
+    fi
 
     NGINX_CONF="/etc/nginx/sites-available/interactive-calendar"
     $SUDO tee "$NGINX_CONF" >/dev/null <<EOF
@@ -337,13 +434,23 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 60s;
         proxy_cache_bypass \$http_upgrade;
     }
 }
 EOF
 
     $SUDO ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/interactive-calendar
-    $SUDO nginx -t && $SUDO systemctl reload nginx
+    $SUDO nginx -t
+    if command -v systemctl >/dev/null 2>&1; then
+      $SUDO systemctl reload-or-restart nginx
+    else
+      $SUDO nginx -s reload
+    fi
+
+    # Переводим публикацию контейнера на 127.0.0.1, чтобы порт приложения не был открыт в обход Nginx
+    set_env_key .env "BIND_HOST" "127.0.0.1"
+    $COMPOSE_CMD up -d
 
     if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q "Status: active"; then
       $SUDO ufw allow 'Nginx Full' >/dev/null 2>&1 || true
@@ -385,7 +492,7 @@ echo -e "  Папка проекта:      ${BOLD}${INSTALL_DIR}${NC}"
 echo -e "  База данных SQLite: ${BOLD}${INSTALL_DIR}/data/calendar_db.sqlite${NC}"
 echo -e ""
 echo -e "  Полезные команды:"
-echo -e "    • Просмотр логов:   ${YELLOW}cd ${INSTALL_DIR} && docker compose logs -f${NC}"
-echo -e "    • Перезапуск:       ${YELLOW}cd ${INSTALL_DIR} && docker compose restart${NC}"
-echo -e "    • Настройки почты:  ${YELLOW}nano ${INSTALL_DIR}/.env && cd ${INSTALL_DIR} && docker compose up -d${NC}"
+echo -e "    • Просмотр логов:   ${YELLOW}cd ${INSTALL_DIR} && ${COMPOSE_CMD} logs -f${NC}"
+echo -e "    • Перезапуск:       ${YELLOW}cd ${INSTALL_DIR} && ${COMPOSE_CMD} restart${NC}"
+echo -e "    • Настройки почты:  ${YELLOW}nano ${INSTALL_DIR}/.env && cd ${INSTALL_DIR} && ${COMPOSE_CMD} up -d${NC}"
 echo -e "${CYAN}=================================================================${NC}"

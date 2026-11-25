@@ -1,13 +1,26 @@
-import React, { useState } from "react";
-import { apiClient } from "../api/client";
-import { useAuth } from "../store/AuthContext";
-import { useThemeLanguage } from "../store/ThemeLanguageContext";
-import { KeyRound, Mail, UserPlus, LogIn, RefreshCcw, Eye, EyeOff, Calendar, Sun, Moon } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { apiClient } from "../api/client.ts";
+import { useAuth } from "../store/AuthContext.tsx";
+import { useThemeLanguage } from "../store/ThemeLanguageContext.tsx";
+import { getLocalizedApiError } from "../utils/errorMessages.ts";
+import {
+  AlertTriangle,
+  Calendar,
+  Eye,
+  EyeOff,
+  KeyRound,
+  LogIn,
+  Mail,
+  Moon,
+  RefreshCcw,
+  Sun,
+  UserPlus,
+} from "lucide-react";
 
 type AuthTab = "login" | "register" | "forgot" | "confirm_reset";
 
 export const AuthPage: React.FC = () => {
-  const { applyUser, refreshUser } = useAuth();
+  const { refreshUser } = useAuth();
   const { lang, setLang, theme, setTheme, t } = useThemeLanguage();
   const [tab, setTab] = useState<AuthTab>("login");
   const [username, setUsername] = useState("");
@@ -19,8 +32,24 @@ export const AuthPage: React.FC = () => {
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [smtpConfigured, setSmtpConfigured] = useState<boolean | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
+    let active = true;
+    apiClient
+      .getAuthConfig()
+      .then((cfg) => {
+        if (active) setSmtpConfigured(cfg.smtp_configured);
+      })
+      .catch(() => {
+        // Ignore if unreachable
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setError(null);
@@ -31,28 +60,30 @@ export const AuthPage: React.FC = () => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const resetFormState = () => {
+  const switchTab = (nextTab: AuthTab) => {
     setError(null);
     setMessage(null);
+    setShowPassword(false);
+    setTab(nextTab);
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    resetFormState();
+    setError(null);
+    setMessage(null);
     setLoading(true);
 
     try {
-      const loginData = await apiClient.login(username, password);
+      await apiClient.login(username, password);
       await refreshUser(true);
-      if (loginData?.id && loginData?.username) {
-        applyUser({
-          id: loginData.id,
-          username: loginData.username,
-          email: loginData.email,
-        });
-      }
-    } catch (err: any) {
-      setError(err.message || (lang === "ru" ? "Неверное имя пользователя или пароль." : "Invalid username or password."));
+    } catch (err) {
+      setError(
+        getLocalizedApiError(
+          err,
+          lang,
+          lang === "ru" ? "Неверное имя пользователя или пароль." : "Invalid username or password."
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -60,7 +91,8 @@ export const AuthPage: React.FC = () => {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    resetFormState();
+    setError(null);
+    setMessage(null);
     setLoading(true);
 
     try {
@@ -70,10 +102,17 @@ export const AuthPage: React.FC = () => {
           ? "Аккаунт создан. Теперь вы можете войти."
           : "Account created successfully. You can now sign in."
       );
+      setShowPassword(false);
       setTab("login");
       setPassword("");
-    } catch (err: any) {
-      setError(err.message || (lang === "ru" ? "Не удалось создать аккаунт." : "Failed to create account."));
+    } catch (err) {
+      setError(
+        getLocalizedApiError(
+          err,
+          lang,
+          lang === "ru" ? "Не удалось создать аккаунт." : "Failed to create account."
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -81,19 +120,29 @@ export const AuthPage: React.FC = () => {
 
   const handleRequestReset = async (e: React.FormEvent) => {
     e.preventDefault();
-    resetFormState();
+    setError(null);
+    setMessage(null);
     setLoading(true);
 
     try {
-      await apiClient.requestPasswordReset(email);
+      await apiClient.requestPasswordReset(email, lang);
       setMessage(
         lang === "ru"
           ? "Если указанный адрес зарегистрирован, мы отправили на него 6-значный код подтверждения. Проверьте входящие и папку «Спам»."
           : "If this address is registered, a 6-digit verification code has been sent to your email. Please check your inbox and spam folder."
       );
+      setShowPassword(false);
       setTab("confirm_reset");
-    } catch (err: any) {
-      setError(err.message || (lang === "ru" ? "Не удалось отправить запрос на сброс пароля." : "Failed to request password reset."));
+    } catch (err) {
+      setError(
+        getLocalizedApiError(
+          err,
+          lang,
+          lang === "ru"
+            ? "Не удалось отправить запрос на сброс пароля."
+            : "Failed to request password reset."
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -101,7 +150,8 @@ export const AuthPage: React.FC = () => {
 
   const handleConfirmReset = async (e: React.FormEvent) => {
     e.preventDefault();
-    resetFormState();
+    setError(null);
+    setMessage(null);
     setLoading(true);
 
     try {
@@ -111,14 +161,23 @@ export const AuthPage: React.FC = () => {
           ? "Пароль успешно изменен. Войдите с новым паролем."
           : "Password updated successfully. Please sign in with your new password."
       );
+      setShowPassword(false);
       setTab("login");
       setUsername("");
       setPassword("");
       setEmail("");
       setCode("");
       setNewPassword("");
-    } catch (err: any) {
-      setError(err.message || (lang === "ru" ? "Не удалось подтвердить код восстановления." : "Failed to confirm verification code."));
+    } catch (err) {
+      setError(
+        getLocalizedApiError(
+          err,
+          lang,
+          lang === "ru"
+            ? "Не удалось подтвердить код восстановления."
+            : "Failed to confirm verification code."
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -207,6 +266,7 @@ export const AuthPage: React.FC = () => {
                     id="login-username"
                     type="text"
                     required
+                    maxLength={50}
                     autoComplete="username"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -226,10 +286,7 @@ export const AuthPage: React.FC = () => {
                   </label>
                   <button
                     type="button"
-                    onClick={() => {
-                      resetFormState();
-                      setTab("forgot");
-                    }}
+                    onClick={() => switchTab("forgot")}
                     className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:underline cursor-pointer bg-transparent border-0"
                     id="go-forgot-pass"
                   >
@@ -244,6 +301,7 @@ export const AuthPage: React.FC = () => {
                     id="login-password"
                     type={showPassword ? "text" : "password"}
                     required
+                    maxLength={128}
                     autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -252,7 +310,7 @@ export const AuthPage: React.FC = () => {
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
+                    onClick={() => setShowPassword((prev) => !prev)}
                     className="absolute inset-y-0 right-0 flex items-center pr-3 text-zinc-400 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 cursor-pointer bg-transparent border-0"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
@@ -275,10 +333,7 @@ export const AuthPage: React.FC = () => {
               <span className="text-zinc-500 dark:text-zinc-400">{t.dont_have_account} </span>
               <button
                 type="button"
-                onClick={() => {
-                  resetFormState();
-                  setTab("register");
-                }}
+                onClick={() => switchTab("register")}
                 className="font-bold text-zinc-900 dark:text-zinc-100 hover:underline cursor-pointer bg-transparent"
                 id="go-register"
               >
@@ -308,6 +363,7 @@ export const AuthPage: React.FC = () => {
                     type="text"
                     required
                     minLength={3}
+                    maxLength={50}
                     autoComplete="username"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -331,6 +387,7 @@ export const AuthPage: React.FC = () => {
                   <input
                     id="register-email"
                     type="email"
+                    maxLength={254}
                     autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -353,15 +410,24 @@ export const AuthPage: React.FC = () => {
                   </div>
                   <input
                     id="register-password"
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     required
                     minLength={6}
+                    maxLength={128}
                     autoComplete="new-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 pl-10 pr-3 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
+                    className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 pl-10 pr-10 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
                     placeholder={lang === "ru" ? "Не менее 6 символов" : "At least 6 characters"}
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-zinc-400 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 cursor-pointer bg-transparent border-0"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
             </div>
@@ -379,10 +445,7 @@ export const AuthPage: React.FC = () => {
               <span className="text-zinc-500 dark:text-zinc-400">{t.already_registered} </span>
               <button
                 type="button"
-                onClick={() => {
-                  resetFormState();
-                  setTab("login");
-                }}
+                onClick={() => switchTab("login")}
                 className="font-bold text-zinc-900 dark:text-zinc-100 hover:underline cursor-pointer bg-transparent"
                 id="go-login"
               >
@@ -395,6 +458,17 @@ export const AuthPage: React.FC = () => {
         {/* Password Reset Request Form */}
         {tab === "forgot" && (
           <form id="forgot-form" className="space-y-5" onSubmit={handleRequestReset}>
+            {smtpConfigured === false && (
+              <div className="flex items-start gap-2 border-2 border-amber-500 bg-amber-50 dark:bg-amber-950/40 p-3 text-xs text-amber-900 dark:text-amber-200">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+                <span>
+                  {lang === "ru"
+                    ? "Почтовый сервер (SMTP) не настроен на этом сервере. В production-режиме отправка кодов на email недоступна — обратитесь к администратору."
+                    : "SMTP email delivery is not configured on this server. Password reset emails cannot be sent in production — please contact the administrator."}
+                </span>
+              </div>
+            )}
+
             <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
               {t.note_recovery}
             </p>
@@ -414,6 +488,7 @@ export const AuthPage: React.FC = () => {
                   id="forgot-email"
                   type="email"
                   required
+                  maxLength={254}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 pl-10 pr-3 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
@@ -425,10 +500,7 @@ export const AuthPage: React.FC = () => {
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  resetFormState();
-                  setTab("login");
-                }}
+                onClick={() => switchTab("login")}
                 className="w-1/2 border-2 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 py-2.5 px-4 text-xs font-bold text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
               >
                 {t.back}
@@ -442,6 +514,16 @@ export const AuthPage: React.FC = () => {
                 {loading ? t.sending_code : t.send_code}
               </button>
             </div>
+
+            <div className="text-center text-xs">
+              <button
+                type="button"
+                onClick={() => switchTab("confirm_reset")}
+                className="font-semibold text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:underline cursor-pointer bg-transparent"
+              >
+                {lang === "ru" ? "У меня уже есть код подтверждения" : "I already have a verification code"}
+              </button>
+            </div>
           </form>
         )}
 
@@ -449,6 +531,30 @@ export const AuthPage: React.FC = () => {
         {tab === "confirm_reset" && (
           <form id="confirm-reset-form" className="space-y-5" onSubmit={handleConfirmReset}>
             <div className="space-y-4">
+              <div>
+                <label
+                  htmlFor="reset-email"
+                  className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 mb-1.5"
+                >
+                  {t.registered_email}
+                </label>
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-zinc-400 dark:text-zinc-500">
+                    <Mail className="h-4 w-4" />
+                  </div>
+                  <input
+                    id="reset-email"
+                    type="email"
+                    required
+                    maxLength={254}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 pl-10 pr-3 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
+                    placeholder={t.enter_recovery_email}
+                  />
+                </div>
+              </div>
+
               <div>
                 <label
                   htmlFor="reset-code"
@@ -466,8 +572,9 @@ export const AuthPage: React.FC = () => {
                     inputMode="numeric"
                     required
                     maxLength={6}
+                    pattern="\d{6}"
                     value={code}
-                    onChange={(e) => setCode(e.target.value)}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                     className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 pl-10 pr-3 text-sm font-mono tabular-nums tracking-widest focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-bold"
                     placeholder={t.verification_placeholder}
                   />
@@ -487,15 +594,24 @@ export const AuthPage: React.FC = () => {
                   </div>
                   <input
                     id="reset-new-password"
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     required
                     minLength={6}
+                    maxLength={128}
                     autoComplete="new-password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 pl-10 pr-3 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
+                    className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 pl-10 pr-10 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors placeholder-zinc-400 dark:placeholder-zinc-500 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
                     placeholder={t.new_password_placeholder}
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-zinc-400 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 cursor-pointer bg-transparent border-0"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
             </div>
@@ -503,10 +619,7 @@ export const AuthPage: React.FC = () => {
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  resetFormState();
-                  setTab("forgot");
-                }}
+                onClick={() => switchTab("forgot")}
                 className="w-1/2 border-2 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 py-2.5 px-4 text-xs font-bold text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
               >
                 {t.back}

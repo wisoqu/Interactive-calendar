@@ -1,0 +1,39 @@
+# Git & VCS
+.git
+.gitignore
+
+# Local dependencies & build outputs
+node_modules
+dist
+build
+out
+coverage
+
+# Secrets & environment files (never copy into Docker layers)
+.env
+.env.*
+!.env.example
+
+# Persistent runtime database files
+data
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-journal
+calendar_db.json
+
+# Documentation, tests & installer scripts not needed at runtime
+docs
+tests
+README.md
+install.sh
+docker-compose.yml
+
+# Logs & editor metadata
+*.log
+.DS_Store
+Thumbs.db
+.vscode
+.idea

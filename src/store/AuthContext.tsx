@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { User, Classroom } from "../types";
-import { apiClient, onUnauthorizedSession } from "../api/client";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import type { Classroom, User } from "../types.ts";
+import { ApiError, apiClient, onUnauthorizedSession } from "../api/client.ts";
 
 interface AuthContextType {
   user: User | null;
@@ -9,18 +9,28 @@ interface AuthContextType {
   currentClassroom: Classroom | null;
   applyUser: (nextUser: User) => void;
   refreshUser: (throwOnError?: boolean) => Promise<void>;
-  refreshClassrooms: () => Promise<void>;
+  refreshClassrooms: () => Promise<Classroom[]>;
   selectClassroom: (classroom: Classroom | null) => void;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function getClassroomIdFromHash(): string | null {
+  try {
+    const match = window.location.hash.match(/^#\/classroom\/([^/]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [currentClassroom, setCurrentClassroom] = useState<Classroom | null>(null);
+  const inFlightClassroomsRef = useRef<Promise<Classroom[]> | null>(null);
 
   const applyUser = useCallback((nextUser: User) => {
     setUser(nextUser);
@@ -32,33 +42,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const data = await apiClient.me();
       setUser({ id: data.id, username: data.username, email: data.email });
     } catch (e) {
-      setUser(null);
-      setClassrooms([]);
-      setCurrentClassroom(null);
+      // Only clear user state on genuine 401 authentication failure, never on transient network errors
+      if (e instanceof ApiError && e.status === 401) {
+        setUser(null);
+        setClassrooms([]);
+        setCurrentClassroom(null);
+      } else if (loading) {
+        setUser(null);
+      }
       if (throwOnError) {
         throw e;
       }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loading]);
 
-  const refreshClassrooms = useCallback(async () => {
-    try {
-      const data = await apiClient.listClassrooms();
-      setClassrooms(data);
-
-      // Functional update prevents stale closure overwrites when updating or switching classrooms
-      setCurrentClassroom((prev) => {
-        if (prev) {
-          const found = data.find((c: Classroom) => c.id === prev.id);
-          return found || data[0] || null;
-        }
-        return data[0] || null;
-      });
-    } catch (e) {
-      console.error("Failed to query classrooms", e);
+  const refreshClassrooms = useCallback(async (): Promise<Classroom[]> => {
+    if (inFlightClassroomsRef.current) {
+      return inFlightClassroomsRef.current;
     }
+
+    const promise = (async () => {
+      try {
+        const data = await apiClient.listClassrooms();
+        setClassrooms(data);
+
+        const hashClassroomId = getClassroomIdFromHash();
+        setCurrentClassroom((prev) => {
+          if (prev) {
+            const found = data.find((c) => c.id === prev.id);
+            if (found) return found;
+          }
+          if (hashClassroomId) {
+            const fromHash = data.find((c) => c.id === hashClassroomId);
+            if (fromHash) return fromHash;
+          }
+          return data[0] || null;
+        });
+
+        return data;
+      } catch (e) {
+        console.error("Failed to query classrooms", e);
+        return [];
+      } finally {
+        inFlightClassroomsRef.current = null;
+      }
+    })();
+
+    inFlightClassroomsRef.current = promise;
+    return promise;
   }, []);
 
   const selectClassroom = useCallback((classroom: Classroom | null) => {
@@ -81,15 +114,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(null);
       setClassrooms([]);
       setCurrentClassroom(null);
+      if (window.location.hash) {
+        window.history.replaceState(null, "", window.location.pathname);
+      }
     }
   }, []);
 
-  // Run on mount to auto-identify logged in session
+  // Identify existing HttpOnly cookie session once on initial mount
   useEffect(() => {
-    refreshUser();
-  }, [refreshUser]);
+    let active = true;
+    (async () => {
+      try {
+        const data = await apiClient.me();
+        if (active) {
+          setUser({ id: data.id, username: data.username, email: data.email });
+        }
+      } catch {
+        if (active) {
+          setUser(null);
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
-  // Clear stale UI state immediately if any API call reports an expired/revoked session
+  // Clear stale UI state immediately if any API call reports an expired/revoked session (401)
   useEffect(() => {
     return onUnauthorizedSession(() => {
       setUser(null);
@@ -98,30 +153,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   }, []);
 
-  // Sync classrooms list whenever authenticated user changes
+  // Load classrooms once whenever the authenticated user changes
   useEffect(() => {
     if (user?.id) {
       refreshClassrooms();
     }
   }, [user?.id, refreshClassrooms]);
 
-  // Keep roles and classroom open/closed state fresh when returning to the browser tab
+  // Refresh session & classroom metadata when returning to a hidden tab (without logging out on network blips)
   useEffect(() => {
     if (!user?.id) return;
-    const handleVisibilityOrFocus = () => {
+    const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        refreshUser()
-          .then(() => refreshClassrooms())
-          .catch(() => {});
+        apiClient
+          .me()
+          .then((data) => {
+            setUser({ id: data.id, username: data.username, email: data.email });
+            return refreshClassrooms();
+          })
+          .catch((err) => {
+            if (err instanceof ApiError && err.status === 401) {
+              setUser(null);
+              setClassrooms([]);
+              setCurrentClassroom(null);
+            }
+          });
       }
     };
-    window.addEventListener("focus", handleVisibilityOrFocus);
-    document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
-      window.removeEventListener("focus", handleVisibilityOrFocus);
-      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [user?.id, refreshUser, refreshClassrooms]);
+  }, [user?.id, refreshClassrooms]);
 
   return (
     <AuthContext.Provider

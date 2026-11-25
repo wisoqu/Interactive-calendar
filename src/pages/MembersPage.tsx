@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from "react";
-import { useAuth } from "../store/AuthContext";
-import { useThemeLanguage } from "../store/ThemeLanguageContext";
-import { ClassMember, ClassMemberRole } from "../types";
-import { apiClient } from "../api/client";
-import { NoticeModal, NoticeModalState } from "../components/NoticeModal";
-import { Users, UserPlus, ShieldAlert, ArrowRight, X } from "lucide-react";
+import React, { useCallback, useEffect, useState } from "react";
+import { useAuth } from "../store/AuthContext.tsx";
+import { useThemeLanguage } from "../store/ThemeLanguageContext.tsx";
+import type { ClassMember, ClassMemberRole } from "../types.ts";
+import { ApiError, apiClient } from "../api/client.ts";
+import { NoticeModal, type NoticeModalState } from "../components/NoticeModal.tsx";
+import { ConfirmModal, type ConfirmModalState } from "../components/ConfirmModal.tsx";
+import { getLocalizedApiError } from "../utils/errorMessages.ts";
+import { ArrowRight, ShieldAlert, UserPlus, Users, X } from "lucide-react";
 
 export const MembersPage: React.FC = () => {
   const { currentClassroom, user, selectClassroom, refreshClassrooms } = useAuth();
@@ -12,52 +14,52 @@ export const MembersPage: React.FC = () => {
   const [members, setMembers] = useState<ClassMember[]>([]);
   const [notice, setNotice] = useState<NoticeModalState | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [confirmState, setConfirmState] = useState<{
-    message: string;
-    onConfirm: () => Promise<void> | void;
-  } | null>(null);
+  const [loadingList, setLoadingList] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [confirmState, setConfirmState] = useState<ConfirmModalState | null>(null);
 
   const [targetUsername, setTargetUsername] = useState("");
   const [targetRole, setTargetRole] = useState<"admin" | "member">("member");
 
-  const fetchMembers = async () => {
-    if (!currentClassroom) return;
-    setLoading(true);
-    try {
-      const list = await apiClient.listMembers(currentClassroom.id);
-      setMembers(list);
-    } catch (err: any) {
-      if (err?.status === 403 || err?.status === 404) {
-        await refreshClassrooms();
+  const fetchMembers = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!currentClassroom) return;
+      setLoadingList(true);
+      try {
+        const list = await apiClient.listMembers(currentClassroom.id, signal);
+        if (!signal?.aborted) {
+          setMembers(list);
+        }
+      } catch (err: unknown) {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+          await refreshClassrooms();
+        }
+        setNotice({
+          variant: "error",
+          title: lang === "ru" ? "Ошибка загрузки списка" : "Failed to load members",
+          message: getLocalizedApiError(
+            err,
+            lang,
+            lang === "ru"
+              ? "Не удалось загрузить список участников класса."
+              : "Failed to load classroom members."
+          ),
+        });
+      } finally {
+        if (!signal?.aborted) {
+          setLoadingList(false);
+        }
       }
-      setNotice({
-        variant: "error",
-        title: lang === "ru" ? "Ошибка загрузки списка" : "Failed to load members",
-        message:
-          err?.message ||
-          (lang === "ru"
-            ? "Не удалось загрузить список участников класса."
-            : "Failed to load classroom members."),
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [currentClassroom?.id, lang, refreshClassrooms]
+  );
 
   useEffect(() => {
-    fetchMembers();
-  }, [currentClassroom?.id]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setConfirmState(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+    const controller = new AbortController();
+    fetchMembers(controller.signal);
+    return () => controller.abort();
+  }, [fetchMembers]);
 
   const role = currentClassroom?.user_role || "member";
   const isOwner = role === "owner";
@@ -69,72 +71,78 @@ export const MembersPage: React.FC = () => {
     if (!currentClassroom || !targetUsername.trim()) return;
     setNotice(null);
     setMessage(null);
-    setLoading(true);
+    setSubmitting(true);
 
     try {
       const roleToAssign = isOwner ? targetRole : "member";
-      await apiClient.addMember(currentClassroom.id, targetUsername.trim(), roleToAssign);
+      const cleanName = targetUsername.trim();
+      await apiClient.addMember(currentClassroom.id, cleanName, roleToAssign);
       const addedMsg =
         lang === "ru"
-          ? `Пользователь «${targetUsername.trim()}» добавлен в класс.`
-          : `Added "${targetUsername.trim()}" to the classroom.`;
+          ? `Пользователь «${cleanName}» добавлен в класс.`
+          : `Added "${cleanName}" to the classroom.`;
 
       setTargetUsername("");
       setMessage(addedMsg);
       await fetchMembers();
       await refreshClassrooms();
-    } catch (err: any) {
-      if (err?.status === 403) {
+    } catch (err) {
+      const apiErr = err instanceof ApiError ? err : null;
+      if (apiErr?.status === 403) {
         await refreshClassrooms();
       }
-      if (err?.code === "CLASSROOM_FULL") {
+      if (apiErr?.code === "CLASSROOM_FULL") {
+        const maxCap = typeof apiErr.meta?.max_members === "number" ? apiErr.meta.max_members : "";
         setNotice({
           variant: "limit",
           title: lang === "ru" ? "Достигнут лимит участников" : "Member limit reached",
           message:
             lang === "ru"
-              ? `Невозможно добавить участника: достигнут установленный лимит класса (${
-                  err?.meta?.max_members ?? ""
-                }). Измените лимит в разделе «Настройки».`
-              : `Cannot add member: classroom capacity limit (${
-                  err?.meta?.max_members ?? ""
-                }) has been reached.`,
+              ? `Невозможно добавить участника: достигнут установленный лимит класса (${maxCap}). Измените лимит в разделе «Настройки».`
+              : `Cannot add member: classroom capacity limit (${maxCap}) has been reached.`,
         });
       } else {
         setNotice({
           variant: "error",
           title: lang === "ru" ? "Не удалось добавить участника" : "Could not add member",
-          message:
-            err?.message ||
-            (lang === "ru"
+          message: getLocalizedApiError(
+            err,
+            lang,
+            lang === "ru"
               ? "Пользователь не найден или уже состоит в классе."
-              : "User not found or already enrolled."),
+              : "User not found or already enrolled."
+          ),
         });
       }
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const handleRoleChange = async (memberId: string, newRole: ClassMemberRole) => {
+  const handleRoleChange = async (memberId: string, newRole: "admin" | "member") => {
     if (!currentClassroom) return;
     setNotice(null);
     setMessage(null);
+    setSubmitting(true);
     try {
       await apiClient.updateMemberRole(currentClassroom.id, memberId, newRole);
       setMessage(lang === "ru" ? "Роль участника обновлена." : "Member role updated.");
       await fetchMembers();
       await refreshClassrooms();
-    } catch (err: any) {
+    } catch (err) {
       await refreshClassrooms();
       await fetchMembers();
       setNotice({
         variant: "error",
         title: lang === "ru" ? "Ошибка изменения роли" : "Role update failed",
-        message:
-          err?.message ||
-          (lang === "ru" ? "Не удалось изменить роль участника." : "Failed to update member role."),
+        message: getLocalizedApiError(
+          err,
+          lang,
+          lang === "ru" ? "Не удалось изменить роль участника." : "Failed to update member role."
+        ),
       });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -151,29 +159,38 @@ export const MembersPage: React.FC = () => {
       : `Remove "${memberName}" from this classroom?`;
 
     setConfirmState({
+      title: lang === "ru" ? "Подтверждение" : "Confirmation",
       message: confirmMessage,
+      confirmLabel: lang === "ru" ? "Подтвердить" : "Confirm",
       onConfirm: async () => {
         setNotice(null);
         setMessage(null);
+        setSubmitting(true);
         try {
           await apiClient.removeMember(currentClassroom.id, memberId);
           if (isSelf) {
             selectClassroom(null);
             await refreshClassrooms();
           } else {
-            setMessage(lang === "ru" ? "Участник исключен из класса." : "Member removed from classroom.");
+            setMessage(
+              lang === "ru" ? "Участник исключен из класса." : "Member removed from classroom."
+            );
             await fetchMembers();
             await refreshClassrooms();
           }
-        } catch (err: any) {
+        } catch (err) {
           await refreshClassrooms();
           setNotice({
             variant: "error",
             title: lang === "ru" ? "Действие недоступно" : "Action failed",
-            message:
-              err?.message ||
-              (lang === "ru" ? "Не удалось удалить участника." : "Failed to remove member."),
+            message: getLocalizedApiError(
+              err,
+              lang,
+              lang === "ru" ? "Не удалось удалить участника." : "Failed to remove member."
+            ),
           });
+        } finally {
+          setSubmitting(false);
         }
       },
     });
@@ -215,7 +232,9 @@ export const MembersPage: React.FC = () => {
         </h1>
         <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
           {t.manage_roles_desc}{" "}
-          <span className="font-bold text-zinc-900 dark:text-zinc-100">{currentClassroom.name}</span>
+          <span className="font-bold text-zinc-900 dark:text-zinc-100">
+            {currentClassroom.name}
+          </span>
         </p>
       </div>
 
@@ -243,7 +262,7 @@ export const MembersPage: React.FC = () => {
             </span>
           </div>
 
-          {loading ? (
+          {loadingList && members.length === 0 ? (
             <div className="py-12 text-center text-xs font-semibold text-zinc-500 dark:text-zinc-400">
               {t.loading_roster}
             </div>
@@ -288,11 +307,12 @@ export const MembersPage: React.FC = () => {
                       {isOwner && !isTargetSelf && m.role !== "owner" && (
                         <select
                           id={`change-role-select-${m.id}`}
+                          disabled={submitting}
                           value={m.role}
                           onChange={(e) =>
-                            handleRoleChange(m.id, e.target.value as ClassMemberRole)
+                            handleRoleChange(m.id, e.target.value as "admin" | "member")
                           }
-                          className="border-2 border-zinc-200 dark:border-zinc-700 py-1.5 px-2.5 text-xs font-semibold bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-900 dark:focus:border-zinc-300 cursor-pointer"
+                          className="border-2 border-zinc-200 dark:border-zinc-700 py-1.5 px-2.5 text-xs font-semibold bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-zinc-900 dark:focus:border-zinc-300 cursor-pointer disabled:opacity-50"
                         >
                           <option value="member">{t.member_role}</option>
                           <option value="admin">{t.admin_role}</option>
@@ -303,8 +323,9 @@ export const MembersPage: React.FC = () => {
                         <button
                           id={`evict-member-btn-${m.id}`}
                           type="button"
+                          disabled={submitting}
                           onClick={() => handleRemoveMember(m.id, m.username)}
-                          className={`h-8 px-2.5 inline-flex items-center justify-center gap-1 border text-xs font-bold transition-colors cursor-pointer focus:outline-none whitespace-nowrap ${
+                          className={`h-8 px-2.5 inline-flex items-center justify-center gap-1 border text-xs font-bold transition-colors cursor-pointer focus:outline-none whitespace-nowrap disabled:opacity-50 ${
                             isTargetSelf
                               ? "border-amber-500 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-900 dark:text-amber-200"
                               : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400"
@@ -358,6 +379,7 @@ export const MembersPage: React.FC = () => {
                     id="add-member-username"
                     type="text"
                     required
+                    maxLength={50}
                     placeholder={t.enter_username_placeholder}
                     value={targetUsername}
                     onChange={(e) => setTargetUsername(e.target.value)}
@@ -400,7 +422,7 @@ export const MembersPage: React.FC = () => {
                 <button
                   id="add-member-submit-btn"
                   type="submit"
-                  disabled={loading || !targetUsername.trim()}
+                  disabled={submitting || !targetUsername.trim()}
                   className="flex w-full items-center justify-center gap-2 bg-zinc-900 dark:bg-zinc-100 py-2.5 px-4 text-xs font-bold text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200 disabled:opacity-40 cursor-pointer transition-colors"
                 >
                   <span>{t.instruct_enrollment}</span>
@@ -424,43 +446,12 @@ export const MembersPage: React.FC = () => {
         )}
       </div>
 
-      {confirmState && (
-        <div
-          id="members-confirm-modal"
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-        >
-          <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-900 dark:border-zinc-700 p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50 mb-2">
-              {lang === "ru" ? "Подтверждение" : "Confirmation"}
-            </h3>
-            <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed mb-6">
-              {confirmState.message}
-            </p>
-            <div className="flex gap-3">
-              <button
-                id="modal-cancel-btn"
-                type="button"
-                onClick={() => setConfirmState(null)}
-                className="flex-1 bg-white dark:bg-zinc-800 border-2 border-zinc-300 dark:border-zinc-700 py-2.5 px-4 text-xs font-bold text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer"
-              >
-                {t.cancel}
-              </button>
-              <button
-                id="modal-confirm-btn"
-                type="button"
-                onClick={async () => {
-                  const cb = confirmState.onConfirm;
-                  setConfirmState(null);
-                  await cb();
-                }}
-                className="flex-1 bg-red-600 text-white py-2.5 px-4 text-xs font-bold hover:bg-red-700 cursor-pointer"
-              >
-                {lang === "ru" ? "Подтвердить" : "Confirm"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmModal
+        id="members-confirm-modal"
+        state={confirmState}
+        cancelLabel={t.cancel}
+        onClose={() => setConfirmState(null)}
+      />
 
       <NoticeModal
         notice={notice}

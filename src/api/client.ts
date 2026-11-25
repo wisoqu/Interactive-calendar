@@ -1,16 +1,31 @@
-const BASE_URL = "/api";
-const SESSION_TOKEN_STORAGE_KEY = "ic_session_token";
-const TAB_INITIALIZED_KEY = "ic_tab_session_initialized";
+import type { CalendarEvent, ClassMember, ClassMemberRole, Classroom, User } from "../types.ts";
 
-let memorySessionToken: string | null = null;
+const BASE_URL = "/api";
+
 const unauthorizedListeners = new Set<() => void>();
+
+export interface ApiMessageResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface AuthConfigResponse {
+  smtp_configured: boolean;
+}
+
+export interface ClassroomPatchPayload {
+  name?: string;
+  description?: string;
+  is_closed?: boolean;
+  max_members?: number;
+}
 
 export class ApiError extends Error {
   status: number;
   code?: string;
-  meta?: Record<string, any>;
+  meta?: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string, meta?: Record<string, any>) {
+  constructor(message: string, status: number, code?: string, meta?: Record<string, unknown>) {
     super(message);
     this.name = "ApiError";
     this.status = status;
@@ -36,90 +51,14 @@ function notifyUnauthorized(): void {
   });
 }
 
-function getStoredSessionToken(): string | null {
-  if (memorySessionToken) return memorySessionToken;
-
-  // Prefer per-tab sessionStorage first so multiple tabs can hold independent user sessions
-  try {
-    const tabToken = window.sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
-    if (tabToken) {
-      memorySessionToken = tabToken;
-      return tabToken;
-    }
-    const tabInitialized = window.sessionStorage.getItem(TAB_INITIALIZED_KEY);
-    if (tabInitialized === "1") {
-      return null;
-    }
-  } catch {
-    // Ignore storage restrictions in sandboxed iframes
-  }
-
-  // Initial fallback to localStorage only when opening a brand-new tab
-  try {
-    const saved = window.localStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
-    if (saved) {
-      memorySessionToken = saved;
-      try {
-        window.sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, saved);
-        window.sessionStorage.setItem(TAB_INITIALIZED_KEY, "1");
-      } catch {
-        // Ignore
-      }
-      return saved;
-    }
-  } catch {
-    // Ignore storage restrictions in sandboxed iframes
-  }
-
-  return null;
-}
-
-export function setStoredSessionToken(token: string | null): void {
-  memorySessionToken = token;
-  try {
-    window.sessionStorage.setItem(TAB_INITIALIZED_KEY, "1");
-    if (token) {
-      window.sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, token);
-    } else {
-      window.sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage restrictions in sandboxed iframes
-  }
-
-  try {
-    if (token) {
-      window.localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, token);
-    } else {
-      window.localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage restrictions in sandboxed iframes
-  }
-}
-
 function sanitizeErrorMessage(rawMessage: unknown, status: number): string {
   if (typeof rawMessage === "string") {
     const trimmed = rawMessage.trim();
-    // Never allow raw proxy HTML (e.g. <html><head><title>403 Forbidden...) into the UI
     if (trimmed && !/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
       return trimmed;
     }
   }
-
-  if (status === 401) {
-    return "Сессия истекла или завершена. Пожалуйста, войдите снова.";
-  }
-  if (status === 403) {
-    return "Доступ ограничен. У вас недостаточно прав или вступление в этот класс закрыто.";
-  }
-  if (status === 404) {
-    return "Запрашиваемый ресурс или класс не найден.";
-  }
-  if (status >= 500) {
-    return "Сервер временно недоступен. Попробуйте повторить действие через пару секунд.";
-  }
-  return `Ошибка запроса (${status}).`;
+  return `HTTP ${status}`;
 }
 
 async function request<T>(
@@ -128,11 +67,9 @@ async function request<T>(
   suppressUnauthorizedBroadcast = false
 ): Promise<T> {
   const url = `${BASE_URL}${path}`;
-  const token = getStoredSessionToken();
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "X-Api-Envelope": "1",
-    ...(token ? { "X-Session-Token": token } : {}),
+    Accept: "application/json",
+    ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
     ...((options.headers as Record<string, string>) || {}),
   };
 
@@ -143,30 +80,20 @@ async function request<T>(
   });
 
   const text = await response.text();
-  let data: any = {};
+  let data: Record<string, unknown> = {};
   try {
-    data = text ? JSON.parse(text) : {};
+    data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
   } catch {
     data = { detail: text };
   }
 
-  if (data && typeof data === "object" && data.__api_error === true) {
-    const logicalStatus = typeof data.status === "number" ? data.status : 400;
-    const cleanDetail = sanitizeErrorMessage(data.detail, logicalStatus);
-    if (logicalStatus === 401 && !suppressUnauthorizedBroadcast) {
-      setStoredSessionToken(null);
-      notifyUnauthorized();
-    }
-    throw new ApiError(cleanDetail, logicalStatus, data.code, data);
-  }
-
   if (!response.ok) {
     const cleanDetail = sanitizeErrorMessage(data?.detail, response.status);
+    const code = typeof data?.code === "string" ? data.code : undefined;
     if (response.status === 401 && !suppressUnauthorizedBroadcast) {
-      setStoredSessionToken(null);
       notifyUnauthorized();
     }
-    throw new ApiError(cleanDetail, response.status, data?.code, data);
+    throw new ApiError(cleanDetail, response.status, code, data);
   }
 
   return data as T;
@@ -174,8 +101,12 @@ async function request<T>(
 
 export const apiClient = {
   // Auth endpoints
-  async register(username: string, password: string, email?: string) {
-    return request<any>(
+  async getAuthConfig(): Promise<AuthConfigResponse> {
+    return request<AuthConfigResponse>("/auth/config", { method: "GET" }, true);
+  },
+
+  async register(username: string, password: string, email?: string): Promise<User> {
+    return request<User>(
       "/auth/register",
       {
         method: "POST",
@@ -185,8 +116,8 @@ export const apiClient = {
     );
   },
 
-  async login(username: string, password: string) {
-    const data = await request<any>(
+  async login(username: string, password: string): Promise<User> {
+    return request<User>(
       "/auth/login",
       {
         method: "POST",
@@ -194,46 +125,33 @@ export const apiClient = {
       },
       true
     );
-    if (data && typeof data.session_token === "string") {
-      setStoredSessionToken(data.session_token);
-    }
-    return data;
   },
 
-  async me() {
-    try {
-      const data = await request<any>("/auth/me", { method: "GET" }, true);
-      if (data && typeof data.session_token === "string") {
-        setStoredSessionToken(data.session_token);
-      }
-      return data;
-    } catch (err) {
-      setStoredSessionToken(null);
-      throw err;
-    }
+  async me(): Promise<User> {
+    return request<User>("/auth/me", { method: "GET" }, true);
   },
 
-  async logout() {
-    try {
-      return await request<any>("/auth/logout", { method: "POST" }, true);
-    } finally {
-      setStoredSessionToken(null);
-    }
+  async logout(): Promise<ApiMessageResponse> {
+    return request<ApiMessageResponse>("/auth/logout", { method: "POST" }, true);
   },
 
-  async requestPasswordReset(email: string) {
-    return request<any>(
+  async requestPasswordReset(email: string, lang: "ru" | "en" = "ru"): Promise<ApiMessageResponse> {
+    return request<ApiMessageResponse>(
       "/auth/password-reset/request",
       {
         method: "POST",
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, lang }),
       },
       true
     );
   },
 
-  async confirmPasswordReset(email: string, code: string, newPassword: string) {
-    return request<any>(
+  async confirmPasswordReset(
+    email: string,
+    code: string,
+    newPassword: string
+  ): Promise<ApiMessageResponse> {
+    return request<ApiMessageResponse>(
       "/auth/password-reset/confirm",
       {
         method: "POST",
@@ -244,77 +162,90 @@ export const apiClient = {
   },
 
   // Classroom endpoints
-  async listClassrooms() {
-    return request<any[]>("/classrooms", { method: "GET" });
+  async listClassrooms(signal?: AbortSignal): Promise<Classroom[]> {
+    return request<Classroom[]>("/classrooms", { method: "GET", signal });
   },
 
-  async createClassroom(name: string, description?: string) {
-    return request<any>("/classrooms", {
+  async createClassroom(name: string, description?: string): Promise<Classroom> {
+    return request<Classroom>("/classrooms", {
       method: "POST",
       body: JSON.stringify({ name, description }),
     });
   },
 
-  async joinClassroom(inviteCode: string) {
-    return request<any>("/classrooms/join", {
+  async joinClassroom(inviteCode: string): Promise<Classroom> {
+    return request<Classroom>("/classrooms/join", {
       method: "POST",
       body: JSON.stringify({ invite_code: inviteCode }),
     });
   },
 
-  async getClassroom(id: string) {
-    return request<any>(`/classrooms/${id}`, { method: "GET" });
+  async getClassroom(id: string, signal?: AbortSignal): Promise<Classroom> {
+    return request<Classroom>(`/classrooms/${id}`, { method: "GET", signal });
   },
 
-  async updateClassroom(
-    id: string,
-    name: string,
-    description?: string,
-    is_closed?: boolean,
-    max_members?: number
-  ) {
-    return request<any>(`/classrooms/${id}/update`, {
-      method: "POST",
-      body: JSON.stringify({ name, description, is_closed, max_members }),
+  async updateClassroom(id: string, payload: ClassroomPatchPayload): Promise<Classroom> {
+    return request<Classroom>(`/classrooms/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     });
   },
 
-  async deleteClassroom(id: string) {
-    return request<any>(`/classrooms/${id}/delete`, {
-      method: "POST",
-      body: JSON.stringify({}),
+  async deleteClassroom(id: string): Promise<ApiMessageResponse> {
+    return request<ApiMessageResponse>(`/classrooms/${id}`, {
+      method: "DELETE",
     });
   },
 
-  // Roster/Member endpoints
-  async listMembers(classroomId: string) {
-    return request<any[]>(`/classrooms/${classroomId}/members`, { method: "GET" });
+  // Roster / Member endpoints
+  async listMembers(classroomId: string, signal?: AbortSignal): Promise<ClassMember[]> {
+    return request<ClassMember[]>(`/classrooms/${classroomId}/members`, {
+      method: "GET",
+      signal,
+    });
   },
 
-  async addMember(classroomId: string, username: string, role: string) {
-    return request<any>(`/classrooms/${classroomId}/members`, {
+  async addMember(
+    classroomId: string,
+    username: string,
+    role: Exclude<ClassMemberRole, "owner">
+  ): Promise<ClassMember> {
+    return request<ClassMember>(`/classrooms/${classroomId}/members`, {
       method: "POST",
       body: JSON.stringify({ username, role }),
     });
   },
 
-  async updateMemberRole(classroomId: string, memberId: string, role: string) {
-    return request<any>(`/classrooms/${classroomId}/members/${memberId}/role`, {
-      method: "POST",
+  async updateMemberRole(
+    classroomId: string,
+    memberId: string,
+    role: Exclude<ClassMemberRole, "owner">
+  ): Promise<ClassMember> {
+    return request<ClassMember>(`/classrooms/${classroomId}/members/${memberId}`, {
+      method: "PATCH",
       body: JSON.stringify({ role }),
     });
   },
 
-  async removeMember(classroomId: string, memberId: string) {
-    return request<any>(`/classrooms/${classroomId}/members/${memberId}/remove`, {
-      method: "POST",
-      body: JSON.stringify({}),
+  async removeMember(classroomId: string, memberId: string): Promise<ApiMessageResponse> {
+    return request<ApiMessageResponse>(`/classrooms/${classroomId}/members/${memberId}`, {
+      method: "DELETE",
     });
   },
 
   // Event endpoints
-  async listEvents(classroomId: string) {
-    return request<any[]>(`/classrooms/${classroomId}/events`, { method: "GET" });
+  async listEvents(
+    classroomId: string,
+    options?: { from?: string; to?: string; signal?: AbortSignal }
+  ): Promise<CalendarEvent[]> {
+    const params = new URLSearchParams();
+    if (options?.from) params.set("from", options.from);
+    if (options?.to) params.set("to", options.to);
+    const qs = params.toString();
+    return request<CalendarEvent[]>(`/classrooms/${classroomId}/events${qs ? `?${qs}` : ""}`, {
+      method: "GET",
+      signal: options?.signal,
+    });
   },
 
   async createEvent(
@@ -323,8 +254,8 @@ export const apiClient = {
     description: string,
     startsAt: string,
     endsAt: string
-  ) {
-    return request<any>(`/classrooms/${classroomId}/events`, {
+  ): Promise<CalendarEvent> {
+    return request<CalendarEvent>(`/classrooms/${classroomId}/events`, {
       method: "POST",
       body: JSON.stringify({ title, description, starts_at: startsAt, ends_at: endsAt }),
     });
@@ -333,21 +264,22 @@ export const apiClient = {
   async updateEvent(
     classroomId: string,
     eventId: string,
-    title?: string,
-    description?: string,
-    startsAt?: string,
-    endsAt?: string
-  ) {
-    return request<any>(`/classrooms/${classroomId}/events/${eventId}/update`, {
-      method: "POST",
-      body: JSON.stringify({ title, description, starts_at: startsAt, ends_at: endsAt }),
+    payload: {
+      title?: string;
+      description?: string;
+      starts_at?: string;
+      ends_at?: string;
+    }
+  ): Promise<CalendarEvent> {
+    return request<CalendarEvent>(`/classrooms/${classroomId}/events/${eventId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     });
   },
 
-  async deleteEvent(classroomId: string, eventId: string) {
-    return request<any>(`/classrooms/${classroomId}/events/${eventId}/delete`, {
-      method: "POST",
-      body: JSON.stringify({}),
+  async deleteEvent(classroomId: string, eventId: string): Promise<ApiMessageResponse> {
+    return request<ApiMessageResponse>(`/classrooms/${classroomId}/events/${eventId}`, {
+      method: "DELETE",
     });
   },
 };

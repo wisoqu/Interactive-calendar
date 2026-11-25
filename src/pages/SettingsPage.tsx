@@ -1,20 +1,50 @@
-import React, { useState, useEffect } from "react";
-import { useAuth } from "../store/AuthContext";
-import { useThemeLanguage } from "../store/ThemeLanguageContext";
-import { apiClient } from "../api/client";
-import { NoticeModal, NoticeModalState } from "../components/NoticeModal";
+import React, { useEffect, useState } from "react";
+import { useAuth } from "../store/AuthContext.tsx";
+import { useThemeLanguage } from "../store/ThemeLanguageContext.tsx";
+import { apiClient, type ClassroomPatchPayload } from "../api/client.ts";
+import { NoticeModal, type NoticeModalState } from "../components/NoticeModal.tsx";
+import { ConfirmModal, type ConfirmModalState } from "../components/ConfirmModal.tsx";
+import { getLocalizedApiError } from "../utils/errorMessages.ts";
 import {
+  AlertTriangle,
+  Check,
+  Copy,
+  Key,
+  Lock,
+  Save,
   Settings,
   ShieldAlert,
-  Save,
   Trash2,
-  Key,
-  Copy,
-  Check,
-  Lock,
   Unlock,
-  AlertTriangle,
 } from "lucide-react";
+
+async function copyTextWithFallback(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to legacy execCommand fallback (works over plain HTTP IP:3000)
+  }
+
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 export const SettingsPage: React.FC = () => {
   const { currentClassroom, refreshClassrooms, selectClassroom } = useAuth();
@@ -27,10 +57,7 @@ export const SettingsPage: React.FC = () => {
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [confirmState, setConfirmState] = useState<{
-    message: string;
-    onConfirm: () => Promise<void> | void;
-  } | null>(null);
+  const [confirmState, setConfirmState] = useState<ConfirmModalState | null>(null);
 
   useEffect(() => {
     if (currentClassroom) {
@@ -46,16 +73,6 @@ export const SettingsPage: React.FC = () => {
     currentClassroom?.is_closed,
     currentClassroom?.max_members,
   ]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setConfirmState(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
 
   if (!currentClassroom) {
     return (
@@ -90,63 +107,51 @@ export const SettingsPage: React.FC = () => {
   const isLimitBlockingJoin = parsedMaxMembers > 0 && parsedMaxMembers <= currentMemberCount;
 
   const handleCopyCode = async () => {
-    try {
-      await navigator.clipboard.writeText(currentClassroom.invite_code);
+    const ok = await copyTextWithFallback(currentClassroom.invite_code);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard API unavailable fallback
+    } else {
+      setNotice({
+        variant: "warning",
+        title: lang === "ru" ? "Скопируйте код вручную" : "Copy code manually",
+        message:
+          lang === "ru"
+            ? `Браузер ограничил доступ к буферу обмена. Код класса: ${currentClassroom.invite_code}`
+            : `Browser blocked clipboard access. Classroom invite code: ${currentClassroom.invite_code}`,
+      });
     }
   };
 
-  const persistSettings = async (
-    nextClosed: boolean,
-    nextMax: number,
-    customSuccessMessage?: string
+  const applyPatch = async (
+    payload: ClassroomPatchPayload,
+    successMessage: string,
+    onFailure?: () => void
   ) => {
-    const cleanName = name.trim() || currentClassroom.name;
-    if (cleanName.length < 2) {
-      setNotice({
-        variant: "warning",
-        title: lang === "ru" ? "Проверьте название класса" : "Invalid classroom name",
-        message:
-          lang === "ru"
-            ? "Название класса должно содержать не менее 2 символов."
-            : "Classroom name must be at least 2 characters long.",
-      });
-      return;
-    }
-
     setNotice(null);
     setMessage(null);
     setLoading(true);
 
     try {
-      const updated = await apiClient.updateClassroom(
-        currentClassroom.id,
-        cleanName,
-        description.trim(),
-        nextClosed,
-        nextMax
-      );
+      const updated = await apiClient.updateClassroom(currentClassroom.id, payload);
       setIsClosed(Boolean(updated.is_closed));
       setMaxMembersInput(String(updated.max_members ?? 0));
       selectClassroom(updated);
       await refreshClassrooms();
-      setMessage(
-        customSuccessMessage ||
-          (lang === "ru" ? "Настройки класса сохранены в базе данных." : "Classroom settings saved.")
-      );
-    } catch (err: any) {
+      setMessage(successMessage);
+    } catch (err) {
+      onFailure?.();
       await refreshClassrooms();
       setNotice({
         variant: "error",
         title: lang === "ru" ? "Не удалось сохранить настройки" : "Failed to save settings",
-        message:
-          err?.message ||
-          (lang === "ru"
+        message: getLocalizedApiError(
+          err,
+          lang,
+          lang === "ru"
             ? "Произошла ошибка при сохранении параметров класса."
-            : "Could not update classroom settings."),
+            : "Could not update classroom settings."
+        ),
       });
     } finally {
       setLoading(false);
@@ -154,6 +159,7 @@ export const SettingsPage: React.FC = () => {
   };
 
   const handleToggleClosed = async (checked: boolean) => {
+    const previous = isClosed;
     setIsClosed(checked);
     const statusText = checked
       ? lang === "ru"
@@ -162,21 +168,46 @@ export const SettingsPage: React.FC = () => {
       : lang === "ru"
       ? "Класс открыт: участники могут присоединяться по коду приглашения."
       : "Classroom opened: students can now join via invite code.";
-    await persistSettings(checked, parsedMaxMembers, statusText);
+
+    // Partial PATCH: updates only is_closed without silently saving unrelated unsaved form edits
+    await applyPatch({ is_closed: checked }, statusText, () => setIsClosed(previous));
   };
 
   const handleClearMemberLimit = async () => {
+    const previous = maxMembersInput;
     setMaxMembersInput("0");
     const statusText =
       lang === "ru"
         ? "Ограничение на количество участников снято."
         : "Member capacity limit removed.";
-    await persistSettings(isClosed, 0, statusText);
+
+    await applyPatch({ max_members: 0 }, statusText, () => setMaxMembersInput(previous));
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
-    await persistSettings(isClosed, parsedMaxMembers);
+    const cleanName = name.trim();
+    if (cleanName.length < 2 || cleanName.length > 100) {
+      setNotice({
+        variant: "warning",
+        title: lang === "ru" ? "Проверьте название класса" : "Invalid classroom name",
+        message:
+          lang === "ru"
+            ? "Название класса должно содержать от 2 до 100 символов."
+            : "Classroom name must be between 2 and 100 characters long.",
+      });
+      return;
+    }
+
+    await applyPatch(
+      {
+        name: cleanName,
+        description: description.trim(),
+        is_closed: isClosed,
+        max_members: parsedMaxMembers,
+      },
+      lang === "ru" ? "Настройки класса сохранены в базе данных." : "Classroom settings saved."
+    );
   };
 
   const handleDelete = () => {
@@ -186,7 +217,9 @@ export const SettingsPage: React.FC = () => {
         : `Are you sure you want to delete "${currentClassroom.name}"? All events and member records will be permanently deleted.`;
 
     setConfirmState({
+      title: lang === "ru" ? "Удаление класса" : "Delete classroom",
       message: confirmMsg,
+      confirmLabel: lang === "ru" ? "Удалить" : "Delete",
       onConfirm: async () => {
         setNotice(null);
         setLoading(true);
@@ -194,13 +227,15 @@ export const SettingsPage: React.FC = () => {
           await apiClient.deleteClassroom(currentClassroom.id);
           selectClassroom(null);
           await refreshClassrooms();
-        } catch (err: any) {
+        } catch (err) {
           setNotice({
             variant: "error",
             title: lang === "ru" ? "Ошибка удаления" : "Delete failed",
-            message:
-              err?.message ||
-              (lang === "ru" ? "Не удалось удалить класс." : "Failed to delete classroom."),
+            message: getLocalizedApiError(
+              err,
+              lang,
+              lang === "ru" ? "Не удалось удалить класс." : "Failed to delete classroom."
+            ),
           });
         } finally {
           setLoading(false);
@@ -249,6 +284,7 @@ export const SettingsPage: React.FC = () => {
                 type="text"
                 required
                 minLength={2}
+                maxLength={100}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 px-3 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
@@ -265,6 +301,7 @@ export const SettingsPage: React.FC = () => {
               <textarea
                 id="update-class-desc"
                 rows={3}
+                maxLength={2000}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 className="block w-full border-2 border-zinc-200 dark:border-zinc-700 py-2.5 px-3 text-sm focus:border-zinc-900 dark:focus:border-zinc-300 focus:outline-none transition-colors bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium"
@@ -456,43 +493,12 @@ export const SettingsPage: React.FC = () => {
         </div>
       </div>
 
-      {confirmState && (
-        <div
-          id="settings-confirm-modal"
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-        >
-          <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-900 dark:border-zinc-700 p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50 mb-2">
-              {lang === "ru" ? "Удаление класса" : "Delete classroom"}
-            </h3>
-            <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed mb-6">
-              {confirmState.message}
-            </p>
-            <div className="flex gap-3">
-              <button
-                id="modal-cancel-btn"
-                type="button"
-                onClick={() => setConfirmState(null)}
-                className="flex-1 bg-white dark:bg-zinc-800 border-2 border-zinc-300 dark:border-zinc-700 py-2.5 px-4 text-xs font-bold text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer"
-              >
-                {t.cancel}
-              </button>
-              <button
-                id="modal-confirm-btn"
-                type="button"
-                onClick={async () => {
-                  const cb = confirmState.onConfirm;
-                  setConfirmState(null);
-                  await cb();
-                }}
-                className="flex-1 bg-red-600 text-white py-2.5 px-4 text-xs font-bold hover:bg-red-700 cursor-pointer"
-              >
-                {lang === "ru" ? "Удалить" : "Delete"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmModal
+        id="settings-confirm-modal"
+        state={confirmState}
+        cancelLabel={t.cancel}
+        onClose={() => setConfirmState(null)}
+      />
 
       <NoticeModal
         notice={notice}

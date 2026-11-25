@@ -1,10 +1,24 @@
 # API Contract - Interactive Calendar
 
-All endpoints accept and return JSON (`application/json`). Every route is mounted under both `/api/...` (used by the React SPA client) and direct root paths (`/auth/...`, `/classrooms/...`, `/health`).
+All endpoints accept and return JSON (`application/json`). Every API route is mounted under `/api/...` (used by the React SPA client), with direct root aliases (`/auth/...`, `/classrooms/...`, `/health`) also available. Unknown `/api/*` paths return `404` JSON instead of SPA HTML.
+
+### Authentication & Security Model
+* **Sessions**: Strictly cookie-based using the `session_id` `HttpOnly` cookie (`SameSite=Lax`, plus `Secure` when served over HTTPS / `X-Forwarded-Proto: https`, 7-day `Max-Age`). Session tokens are **never** exposed in JSON responses and are **never** accepted from `X-Session-Token` headers.
+* **CSRF Protection**: State-changing requests (`POST`, `PATCH`, `PUT`, `DELETE`) verify `Origin` / `Referer` against the request `Host` whenever those headers are present.
+* **Rate Limiting**: Sliding-window per-IP rate limits protect login, registration, password reset request/confirmation, and invite-code joining (`429 Too Many Requests` with `code: "RATE_LIMITED"`).
 
 ---
 
 ## 1. Authentication Endpoints
+
+### Auth Configuration Status
+* **Path**: `GET /api/auth/config`
+* **Response (200 OK)**:
+  ```json
+  {
+    "smtp_configured": true
+  }
+  ```
 
 ### Register
 * **Path**: `POST /api/auth/register` (alias: `POST /auth/register`)
@@ -16,6 +30,7 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
     "email": "ivan@school42.ru"
   }
   ```
+* **Validation**: `username` 3–50 chars (case-insensitive unique), `password` 6–128 chars, optional `email` (case-insensitive unique when provided).
 * **Response (201 Created)**:
   ```json
   {
@@ -34,8 +49,7 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
     "password": "SecurePassword123"
   }
   ```
-* **Response Headers**:
-  * Sets `session_id` `HttpOnly` cookie (`SameSite=None; Secure` over HTTPS, `SameSite=Lax` over plain HTTP, 7-day `Max-Age`).
+* **Response Headers**: Sets `session_id` (`HttpOnly; SameSite=Lax`, plus `Secure` on HTTPS).
 * **Response (200 OK)**:
   ```json
   {
@@ -59,7 +73,7 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
 
 ### Logout
 * **Path**: `POST /api/auth/logout` (alias: `POST /auth/logout`)
-* **Behavior**: Marks current session `revoked_at` in SQLite and clears `session_id` cookie.
+* **Behavior**: Marks current session `revoked_at` in SQLite and clears the `session_id` cookie.
 * **Response (200 OK)**:
   ```json
   {
@@ -73,9 +87,11 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
 * **Request Payload**:
   ```json
   {
-    "email": "ivan@school42.ru"
+    "email": "ivan@school42.ru",
+    "lang": "ru"
   }
   ```
+* **Behavior**: Returns `503` (`code: "SMTP_NOT_CONFIGURED"`) in production if SMTP is not configured. Otherwise, always returns a uniform `200 OK` message regardless of whether the email exists (preventing email enumeration).
 * **Response (200 OK)**:
   ```json
   {
@@ -94,7 +110,7 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
     "new_password": "NewSecurePassword456"
   }
   ```
-* **Behavior**: Verifies 6-digit OTP SHA-256 hash & 15-minute expiry, updates PBKDF2 password hash, marks code as used, and revokes all active sessions for the user.
+* **Behavior**: Verifies 6-digit OTP SHA-256 hash & 15-minute expiry. Locks out the OTP after **5 failed attempts** (`429`, `code: "RESET_CODE_LOCKED"`). On success, updates the PBKDF2 password hash, marks the code as used, and atomically revokes all active sessions for the user.
 * **Response (200 OK)**:
   ```json
   {
@@ -122,6 +138,7 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
       "user_role": "owner",
       "is_closed": false,
       "max_members": 30,
+      "member_count": 12,
       "created_at": "2026-09-01T08:00:00.000Z"
     }
   ]
@@ -146,15 +163,15 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
     "invite_code": "A7K9P2"
   }
   ```
-* **Response (200 OK)**: Classroom object with `user_role: "member"` (or `403` if `is_closed` is `true` or `max_members` limit is reached; `404` if code does not exist).
+* **Response (200 OK)**: Classroom object with `user_role: "member"` (or `403` with `CLASSROOM_CLOSED` / `CLASSROOM_FULL`, `404` with `CLASSROOM_NOT_FOUND`, `429` with `RATE_LIMITED`).
 
 ### Get Classroom Details
 * **Path**: `GET /api/classrooms/:classroom_id`
 * **Response (200 OK)**: Classroom object for enrolled members (`403` if non-member).
 
-### Update Classroom Settings (Owner Only)
+### Update Classroom Settings (Owner Only, Supports Partial Updates)
 * **Path**: `PATCH /api/classrooms/:classroom_id`
-* **Request Payload**:
+* **Request Payload** (any subset of fields):
   ```json
   {
     "name": "10 «А» класс (профиль)",
@@ -207,14 +224,17 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
 
 ### Remove Member / Leave Classroom
 * **Path**: `DELETE /api/classrooms/:classroom_id/members/:member_id`
-* **Permissions**: Non-owner self-leave allowed; `owner` can remove `admin`/`member`; `admin` can remove `member`. `owner` cannot be removed (`400`).
+* **Permissions**: Non-owner self-leave allowed; `owner` can remove `admin`/`member`; `admin` can remove `member`. `owner` cannot be removed (`400`, `OWNER_IMMUTABLE`).
 
 ---
 
 ## 4. Classroom Events Endpoints
 
-### List Events (Sorted Chronologically by `starts_at`)
+### List Events (Sorted Chronologically in SQL by `starts_at`)
 * **Path**: `GET /api/classrooms/:classroom_id/events`
+* **Optional Query Parameters**:
+  * `from`: ISO-8601 UTC timestamp — returns events overlapping `[from, ...]` (`ends_at >= from`).
+  * `to`: ISO-8601 UTC timestamp — returns events overlapping `[..., to]` (`starts_at <= to`).
 * **Response (200 OK)**: Array of event objects in UTC ISO-8601 format.
 
 ### Create Event (Owner / Admin Only)
@@ -233,7 +253,7 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
 ### Get Event Details
 * **Path**: `GET /api/classrooms/:classroom_id/events/:event_id`
 
-### Update Event (Owner / Admin Only)
+### Update Event (Owner / Admin Only, Supports Partial Updates)
 * **Path**: `PATCH /api/classrooms/:classroom_id/events/:event_id`
 
 ### Delete Event (Owner / Admin Only)
@@ -245,9 +265,11 @@ All endpoints accept and return JSON (`application/json`). Every route is mounte
 
 * `GET /api/health` (alias `/health`) -> `{ "status": "healthy", "timestamp": "..." }`
 * `GET /api/health/db` (alias `/health/db`) -> `{ "status": "healthy", "database": "sqlite", "connection": "ok" }`
-* All `4xx` / `5xx` errors return:
+* All `4xx` / `5xx` errors return structured JSON with a machine-readable `code` (mapped to RU/EN on the frontend) and a human-readable `detail`:
   ```json
   {
-    "detail": "Понятное описание причины ошибки."
+    "detail": "Достигнут максимальный лимит участников в классе (30).",
+    "code": "CLASSROOM_FULL",
+    "max_members": 30
   }
   ```

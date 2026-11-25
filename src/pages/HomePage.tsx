@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from "react";
-import { useAuth } from "../store/AuthContext";
-import { useThemeLanguage } from "../store/ThemeLanguageContext";
-import { apiClient } from "../api/client";
-import { Classroom } from "../types";
-import { NoticeModal, NoticeModalState } from "../components/NoticeModal";
-import { Plus, Users, Code2, ArrowRight, ChevronRight } from "lucide-react";
+import React, { useState } from "react";
+import { useAuth } from "../store/AuthContext.tsx";
+import { useThemeLanguage } from "../store/ThemeLanguageContext.tsx";
+import { ApiError, apiClient } from "../api/client.ts";
+import type { Classroom } from "../types.ts";
+import { NoticeModal, type NoticeModalState } from "../components/NoticeModal.tsx";
+import { getLocalizedApiError } from "../utils/errorMessages.ts";
+import { ArrowRight, ChevronRight, Code2, Plus, Users } from "lucide-react";
 
 interface HomePageProps {
   onOpenCalendar?: () => void;
@@ -17,11 +18,8 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
   const [newClassDesc, setNewClassDesc] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [notice, setNotice] = useState<NoticeModalState | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    refreshClassrooms();
-  }, [refreshClassrooms]);
+  const [creating, setCreating] = useState(false);
+  const [joining, setJoining] = useState(false);
 
   const handleSelectGroup = (cr: Classroom) => {
     selectClassroom(cr);
@@ -32,7 +30,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
     e.preventDefault();
     if (!newClassName.trim()) return;
     setNotice(null);
-    setLoading(true);
+    setCreating(true);
 
     try {
       const created = await apiClient.createClassroom(
@@ -44,18 +42,20 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
       selectClassroom(created);
       await refreshClassrooms();
       onOpenCalendar?.();
-    } catch (err: any) {
+    } catch (err) {
       setNotice({
         variant: "error",
         title: lang === "ru" ? "Не удалось создать класс" : "Could not create classroom",
-        message:
-          err?.message ||
-          (lang === "ru"
+        message: getLocalizedApiError(
+          err,
+          lang,
+          lang === "ru"
             ? "Проверьте корректность названия класса (от 2 до 100 символов)."
-            : "Please enter a valid classroom name (2 to 100 characters)."),
+            : "Please enter a valid classroom name (2 to 100 characters)."
+        ),
       });
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
   };
 
@@ -64,7 +64,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
     const trimmedCode = inviteCode.trim().toUpperCase();
     if (!trimmedCode) return;
     setNotice(null);
-    setLoading(true);
+    setJoining(true);
 
     try {
       const res = await apiClient.joinClassroom(trimmedCode);
@@ -72,11 +72,15 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
       selectClassroom(res);
       await refreshClassrooms();
       onOpenCalendar?.();
-    } catch (err: any) {
-      const code = err?.code;
-      const className = err?.meta?.classroom_name;
-      const maxCap = err?.meta?.max_members;
-      const curCount = err?.meta?.member_count;
+    } catch (err) {
+      const apiErr = err instanceof ApiError ? err : null;
+      const code = apiErr?.code;
+      const className =
+        typeof apiErr?.meta?.classroom_name === "string" ? apiErr.meta.classroom_name : undefined;
+      const maxCap =
+        typeof apiErr?.meta?.max_members === "number" ? apiErr.meta.max_members : undefined;
+      const curCount =
+        typeof apiErr?.meta?.member_count === "number" ? apiErr.meta.member_count : undefined;
 
       if (code === "CLASSROOM_CLOSED") {
         setNotice({
@@ -104,7 +108,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
                   maxCap ?? ""
                 } members). Ask the owner to increase or remove the limit in Settings.`,
         });
-      } else if (code === "CLASSROOM_NOT_FOUND" || err?.status === 404) {
+      } else if (code === "CLASSROOM_NOT_FOUND" || apiErr?.status === 404) {
         setNotice({
           variant: "warning",
           title: lang === "ru" ? "Класс не найден" : "Invalid invite code",
@@ -117,15 +121,17 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
         setNotice({
           variant: "error",
           title: lang === "ru" ? "Не удалось присоединиться" : "Unable to join classroom",
-          message:
-            err?.message ||
-            (lang === "ru"
+          message: getLocalizedApiError(
+            err,
+            lang,
+            lang === "ru"
               ? "Не удалось выполнить вход по коду приглашения."
-              : "Could not join classroom with this invite code."),
+              : "Could not join classroom with this invite code."
+          ),
         });
       }
     } finally {
-      setLoading(false);
+      setJoining(false);
     }
   };
 
@@ -187,7 +193,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
                     }`}
                   >
                     <div>
-                      {/* Clean unboxed inline metadata */}
                       <div className="flex items-center justify-between gap-2 text-xs text-zinc-500 dark:text-zinc-400">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-semibold text-zinc-800 dark:text-zinc-200">
@@ -266,7 +271,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
               <button
                 id="join-class-btn"
                 type="submit"
-                disabled={loading || !inviteCode.trim()}
+                disabled={joining || !inviteCode.trim()}
                 className="flex w-full items-center justify-center gap-2 bg-zinc-900 dark:bg-zinc-100 py-2.5 px-4 text-xs font-bold text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200 disabled:opacity-40 cursor-pointer transition-colors"
               >
                 <span>{t.enroll_btn}</span>
@@ -294,6 +299,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
                   type="text"
                   required
                   minLength={2}
+                  maxLength={100}
                   placeholder={lang === "ru" ? "Например: 10 «А» класс" : "e.g. Grade 10A"}
                   value={newClassName}
                   onChange={(e) => setNewClassName(e.target.value)}
@@ -311,6 +317,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
                 <textarea
                   id="create-class-desc"
                   rows={3}
+                  maxLength={2000}
                   placeholder={t.classroom_desc_placeholder}
                   value={newClassDesc}
                   onChange={(e) => setNewClassDesc(e.target.value)}
@@ -321,7 +328,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onOpenCalendar }) => {
               <button
                 id="create-class-btn"
                 type="submit"
-                disabled={loading || !newClassName.trim()}
+                disabled={creating || !newClassName.trim()}
                 className="flex w-full items-center justify-center gap-2 bg-zinc-900 dark:bg-zinc-100 py-2.5 px-4 text-xs font-bold text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200 disabled:opacity-40 cursor-pointer transition-colors"
               >
                 <span>{t.establish_btn}</span>
