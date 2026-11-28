@@ -134,7 +134,7 @@ if [ -z "$INSTALL_LOG_FILE" ]; then
   fi
 fi
 
-# Дублируем весь вывод в журнал (подсказки при этом остаются в /dev/tty).
+# Дублируем весь вывод в журнал; вопросы печатаются в этот же поток (см. prompt_input).
 exec > >(tee -a "$INSTALL_LOG_FILE") 2>&1
 
 on_error() {
@@ -154,15 +154,25 @@ on_error() {
 trap on_error ERR
 
 # ------------------------------------------------------------------------------
-# Ввод с терминала (работает при запуске через bash <(curl ...) и curl | bash)
+# Ввод с терминала.
+#
+# Вопросы печатаются в stdout (тот же поток, что и остальной вывод установщика,
+# включая tee в журнал) — так строки не перемешиваются. Читаем при этом из
+# /dev/tty (fd 3), потому что при `curl | bash` stdin занят текстом скрипта.
 # ------------------------------------------------------------------------------
-interactive_input_possible() {
-  [ "$ASSUME_YES" != "1" ] || return 1
-  # Проверяем, что /dev/tty действительно можно открыть (в cron/CI его может не быть).
-  { exec 3<>/dev/tty; } 2>/dev/null || return 1
-  exec 3>&-
-  return 0
-}
+HAS_TTY=0
+if [ "$ASSUME_YES" != "1" ]; then
+  if { exec 3<>/dev/tty; } 2>/dev/null; then
+    HAS_TTY=1
+  fi
+fi
+
+if [ "$ASSUME_YES" != "1" ] && [ "$HAS_TTY" != "1" ]; then
+  log_err "Нет доступного терминала для интерактивных вопросов."
+  log_err "Запустите установщик с --yes и параметрами, например:"
+  log_err "  bash install.sh --yes --domain calendar.example.ru --email admin@example.ru"
+  exit 2
+fi
 
 prompt_input() {
   local prompt_text="$1"
@@ -175,12 +185,11 @@ prompt_input() {
     return 0
   fi
 
-  if interactive_input_possible; then
-    printf "%b" "$prompt_text" > /dev/tty
-    IFS= read -r input_val < /dev/tty || true
-  else
-    printf "%b" "$prompt_text"
-    IFS= read -r input_val || true
+  printf "%b" "$prompt_text"
+  if ! IFS= read -r input_val <&3; then
+    printf "\n"
+    log_err "Ввод с терминала прерван."
+    exit 2
   fi
 
   if [ -z "$input_val" ] && [ -n "$default_val" ]; then
@@ -199,15 +208,13 @@ prompt_secret() {
     return 0
   fi
 
-  if interactive_input_possible; then
-    printf "%b" "$prompt_text" > /dev/tty
-    IFS= read -rs input_val < /dev/tty || true
-    printf "\n" > /dev/tty
-  else
-    printf "%b" "$prompt_text"
-    IFS= read -rs input_val || true
+  printf "%b" "$prompt_text"
+  if ! IFS= read -rs input_val <&3; then
     printf "\n"
+    log_err "Ввод с терминала прерван."
+    exit 2
   fi
+  printf "\n"
   printf -v "$var_name" '%s' "$input_val"
 }
 
@@ -372,7 +379,7 @@ if [ -f /proc/meminfo ]; then
   if [ "$TOTAL_RAM_MB" -lt 1800 ] && [ "$TOTAL_SWAP_MB" -lt 512 ] && [ "$CONFIGURE_SWAP" != "0" ]; then
     log_warn "На сервере менее 2 ГБ ОЗУ и не настроен SWAP."
     echo "  Для быстрой и безошибочной сборки проекта на недорогом VPS рекомендуется добавить 2 ГБ SWAP."
-    if [ "$CONFIGURE_SWAP" = "1" ] || ask_yes_no "  ${YELLOW}[НЕОБЯЗАТЕЛЬНО] Создать файл подкачки SWAP (2 ГБ)? [Y/n]: ${NC}" "Y"; then
+    if [ "$CONFIGURE_SWAP" = "1" ] || ask_yes_no "  ${YELLOW}Создать файл подкачки (swap) на 2 ГБ? [Y/n]: ${NC}" "Y"; then
       if [ ! -f /swapfile ]; then
         echo "  Создание /swapfile (2 ГБ)..."
         if "${SUDO[@]}" fallocate -l 2G /swapfile 2>/dev/null || "${SUDO[@]}" dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; then
@@ -415,7 +422,7 @@ fi
 
 if ! command -v docker >/dev/null 2>&1; then
   log_warn "Docker не установлен на этом сервере."
-  if [ "$ASSUME_YES" = "1" ] || ask_yes_no "  ${YELLOW}[ОБЯЗАТЕЛЬНО] Установить Docker автоматически с официального сайта? [Y/n]: ${NC}" "Y"; then
+  if [ "$ASSUME_YES" = "1" ] || ask_yes_no "  ${YELLOW}Docker не установлен. Установить его автоматически? [Y/n]: ${NC}" "Y"; then
     if ! curl -fsSL https://get.docker.com | "${SUDO[@]}" sh; then
       log_err "Не удалось установить Docker через get.docker.com."
       log_err "Установите Docker вручную: https://docs.docker.com/engine/install/"
@@ -475,7 +482,7 @@ echo ""
 log_step "[3/6] Загрузка приложения..."
 
 if [ -z "$INSTALL_DIR" ]; then
-  prompt_input "${YELLOW}  [ОБЯЗАТЕЛЬНО] Папка установки [Enter = ${DEFAULT_INSTALL_DIR}]: ${NC}" INSTALL_DIR "$DEFAULT_INSTALL_DIR"
+  prompt_input "${YELLOW}  Папка установки [Enter = ${DEFAULT_INSTALL_DIR}]: ${NC}" INSTALL_DIR "$DEFAULT_INSTALL_DIR"
 fi
 if [ -z "$INSTALL_DIR" ]; then
   INSTALL_DIR="$DEFAULT_INSTALL_DIR"
@@ -552,21 +559,32 @@ SMTP_FROM_VALUE=""
 SMTP_SECURE_VALUE="false"
 
 if [ "$CONFIGURE_ENV" = "Y" ]; then
-  echo "  --- Настройка отправки писем (восстановление пароля по email) ---"
-  printf '%b\n' "  Этот шаг ${BOLD}НЕОБЯЗАТЕЛЕН${NC}: если нажать Enter, календарь будет полностью работать,"
-  echo "  но отправка 6-значных кодов сброса пароля на почту будет отключена."
-  echo "  Подсказка по популярным почтовым сервисам (нужен «Пароль приложения»!):"
-  printf '%b\n' "    • Gmail:   SMTP Host = ${BOLD}smtp.gmail.com${NC},   Port = ${BOLD}587${NC}"
-  printf '%b\n' "    • Яндекс:  SMTP Host = ${BOLD}smtp.yandex.ru${NC},  Port = ${BOLD}465${NC}"
-  printf '%b\n' "    • Mail.ru: SMTP Host = ${BOLD}smtp.mail.ru${NC},    Port = ${BOLD}465${NC}"
-  echo ""
+  echo "  --- Отправка писем (сброс пароля по email) ---"
+  echo "  Необязательно: без SMTP календарь работает, но коды сброса пароля не отправляются."
+  echo "  Нужен «пароль приложения» почтового сервиса, а не обычный пароль."
 
-  smtp_host="$SMTP_HOST_IN"
-  if [ -z "$smtp_host" ]; then
-    prompt_input "${YELLOW}  [НЕОБЯЗАТЕЛЬНО] SMTP Host (или нажмите Enter, чтобы пропустить): ${NC}" smtp_host ""
+  SMTP_WANTED=0
+  if [ -n "$SMTP_HOST_IN$SMTP_USER_IN$SMTP_PASS_IN" ]; then
+    SMTP_WANTED=1
+  elif [ "$ASSUME_YES" != "1" ] && ask_yes_no "  Настроить отправку писем сейчас? [y/N]: " "N"; then
+    SMTP_WANTED=1
   fi
 
-  if [ -n "$smtp_host" ]; then
+  if [ "$SMTP_WANTED" = "1" ]; then
+    echo "  Подсказка: Gmail — smtp.gmail.com:587, Яндекс — smtp.yandex.ru:465, Mail.ru — smtp.mail.ru:465."
+    echo ""
+
+    smtp_host="$SMTP_HOST_IN"
+    while [ -z "$smtp_host" ]; do
+      if [ "$ASSUME_YES" = "1" ]; then
+        log_err "  В неинтерактивном режиме с SMTP требуется --smtp-host."
+        exit 2
+      fi
+      prompt_input "  SMTP-сервер (например, smtp.yandex.ru): " smtp_host ""
+      if [ -z "$smtp_host" ]; then
+        log_err "  SMTP-сервер не может быть пустым."
+      fi
+    done
     SMTP_HOST_VALUE="$smtp_host"
 
     default_smtp_port="${SMTP_PORT_IN:-587}"
@@ -577,7 +595,7 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
     while true; do
       smtp_port="$default_smtp_port"
       if [ -z "${SMTP_PORT_IN:-}" ] && [ "$ASSUME_YES" != "1" ]; then
-        prompt_input "${YELLOW}  [ОБЯЗАТЕЛЬНО для почты] SMTP Port [Enter = ${default_smtp_port}]: ${NC}" smtp_port "$default_smtp_port"
+        prompt_input "  Порт SMTP [Enter = ${default_smtp_port}]: " smtp_port "$default_smtp_port"
       fi
       if [[ "$smtp_port" =~ ^[0-9]+$ ]] && [ "$smtp_port" -ge 1 ] && [ "$smtp_port" -le 65535 ]; then
         break
@@ -590,7 +608,7 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
 
     smtp_user="$SMTP_USER_IN"
     while [ -z "$smtp_user" ]; do
-      prompt_input "${YELLOW}  [ОБЯЗАТЕЛЬНО для почты] Логин почты (например, school42@gmail.com): ${NC}" smtp_user ""
+      prompt_input "  Логин почты (например, school42@gmail.com): " smtp_user ""
       if [ "$ASSUME_YES" = "1" ] && [ -z "$smtp_user" ]; then
         log_err "  В неинтерактивном режиме с SMTP_HOST требуется --smtp-user."
         exit 2
@@ -601,7 +619,7 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
 
     smtp_pass="$SMTP_PASS_IN"
     while [ -z "$smtp_pass" ]; do
-      prompt_secret "${YELLOW}  [ОБЯЗАТЕЛЬНО для почты] Пароль приложения SMTP (ввод скрыт): ${NC}" smtp_pass
+      prompt_secret "  Пароль приложения SMTP (ввод скрыт): " smtp_pass
       if [ "$ASSUME_YES" = "1" ] && [ -z "$smtp_pass" ]; then
         log_err "  В неинтерактивном режиме с SMTP_HOST требуется --smtp-pass."
         exit 2
@@ -612,7 +630,7 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
     default_from="Школьный календарь <${smtp_user}>"
     smtp_from="$SMTP_FROM_IN"
     if [ -z "$smtp_from" ]; then
-      prompt_input "${YELLOW}  [НЕОБЯЗАТЕЛЬНО] Отправитель письма [Enter = ${default_from}]: ${NC}" smtp_from "$default_from"
+      prompt_input "  Отправитель письма [Enter = ${default_from}]: " smtp_from "$default_from"
     fi
     if [ -z "$smtp_from" ]; then
       smtp_from="$default_from"
@@ -622,10 +640,10 @@ if [ "$CONFIGURE_ENV" = "Y" ]; then
     if [ "$SMTP_PORT_VALUE" = "465" ]; then
       SMTP_SECURE_VALUE="true"
     fi
-    log_ok "Почта SMTP будет сохранена в .env."
+    log_ok "Параметры почты сохранены."
   else
     SMTP_FROM_VALUE="Школьный календарь <no-reply@example.com>"
-    log_warn "Настройка почты пропущена (можно заполнить ${ENV_FILE} позже)."
+    echo "  Почта не настроена — сброс пароля по email будет недоступен."
   fi
 
   {
@@ -652,7 +670,7 @@ else
   ensure_env_key "$ENV_FILE" "LISTEN_HOST" "0.0.0.0"
   ensure_env_key "$ENV_FILE" "TRUST_PROXY" "0"
   ensure_env_key "$ENV_FILE" "SQLITE_DB_PATH" "/app/data/calendar_db.sqlite"
-  log_ok "Существующий .env сохранён (BIND_HOST/TRUST_PROXY не изменены)."
+  log_ok "Существующий .env сохранён (перезапись не выполняется)."
 fi
 
 # Перечитываем порт (на случай, если .env уже существовал)
@@ -671,7 +689,7 @@ log_step "[5/6] Сборка и запуск контейнера приложе
 wait_for_health() {
   local seconds="${1:-$HEALTH_WAIT_SECONDS}"
   local i=0
-  printf "  Ожидание готовности /api/health"
+  printf "  Ожидание готовности /api/health/db"
   while [ "$i" -lt "$seconds" ]; do
     if curl -fsS --max-time 3 "http://127.0.0.1:${APP_PORT}/api/health/db" >/dev/null 2>&1; then
       echo ""
@@ -698,31 +716,62 @@ echo ""
 # ------------------------------------------------------------------------------
 # Шаг 6. Домен, Nginx и бесплатный HTTPS (Let's Encrypt)
 # ------------------------------------------------------------------------------
-log_step "[6/6] Настройка домена и защищенного HTTPS-соединения (порт 443)..."
-
-if [ "$SKIP_SSL" = "1" ]; then
-  log_warn "Настройка домена и HTTPS пропущена (--no-ssl)."
-elif [ -z "$DOMAIN_NAME" ]; then
-  echo "  Если у вас есть домен, направленный A-записью на IP этого сервера,"
-  echo "  скрипт автоматически настроит Nginx, закроет прямой внешний доступ к порту ${APP_PORT}"
-  echo "  и выпустит бесплатный SSL-сертификат Let's Encrypt."
-  while true; do
-    prompt_input "${YELLOW}  [НЕОБЯЗАТЕЛЬНО] Введите ваш домен (или нажмите Enter для работы по IP:${APP_PORT}): ${NC}" RAW_DOMAIN ""
-    if [ -z "$RAW_DOMAIN" ]; then
-      DOMAIN_NAME=""
-      break
-    fi
-    NORMALIZED_DOMAIN="$(normalize_domain "$RAW_DOMAIN")"
-    if is_valid_domain "$NORMALIZED_DOMAIN"; then
-      DOMAIN_NAME="$NORMALIZED_DOMAIN"
-      break
-    fi
-    log_err "  Некорректное доменное имя «${RAW_DOMAIN}». Пример: calendar.school42.ru (или нажмите Enter, чтобы пропустить)."
-  done
-fi
+log_step "[6/6] Домен и HTTPS (Let's Encrypt)"
 
 FINAL_URL=""
-if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ]; then
+HTTPS_ALREADY=0
+EXISTING_DOMAIN=""
+NGINX_CONF="${NGINX_SITES_AVAILABLE_DIR}/interactive-calendar"
+NGINX_LINK="${NGINX_SITES_ENABLED_DIR}/interactive-calendar"
+if [ -f "$NGINX_CONF" ]; then
+  EXISTING_DOMAIN="$(awk '/^[[:space:]]*server_name/ {print $2; exit}' "$NGINX_CONF" | tr -d ';' || true)"
+fi
+EXISTING_CERT=0
+if [ -n "$EXISTING_DOMAIN" ] && "${SUDO[@]}" test -f "${LETSENCRYPT_LIVE_DIR}/${EXISTING_DOMAIN}/fullchain.pem" 2>/dev/null; then
+  EXISTING_CERT=1
+fi
+
+if [ "$SKIP_SSL" = "1" ]; then
+  echo "  Настройка домена и HTTPS пропущена (--no-ssl): календарь работает по IP."
+elif [ -n "$DOMAIN_NAME" ]; then
+  echo "  Домен: ${DOMAIN_NAME}"
+elif [ "$EXISTING_CERT" = "1" ]; then
+  DOMAIN_NAME="$EXISTING_DOMAIN"
+  HTTPS_ALREADY=1
+  log_ok "HTTPS уже настроен для https://${DOMAIN_NAME} — сохраняем конфигурацию."
+  echo "  Чтобы сменить домен: bash ${INSTALL_DIR}/install.sh --domain новый.домен"
+elif [ -n "$EXISTING_DOMAIN" ]; then
+  echo "  Ранее для ${EXISTING_DOMAIN} уже настраивался Nginx, но сертификат не выпущен."
+  if [ "$ASSUME_YES" = "1" ] || ask_yes_no "  Повторить выпуск сертификата Let's Encrypt? [Y/n]: " "Y"; then
+    DOMAIN_NAME="$EXISTING_DOMAIN"
+  else
+    FINAL_URL="http://${EXISTING_DOMAIN}"
+  fi
+else
+  echo "  Календарь уже запущен по адресу http://<IP-сервера>:${APP_PORT}."
+  echo "  Можно подключить домен: Nginx на 80/443 и бесплатный сертификат Let's Encrypt."
+  echo "  Нужны A-запись домена на этот сервер и открытые порты 80 и 443."
+  if [ "$ASSUME_YES" = "1" ]; then
+    echo "  Домен не указан (--yes без --domain): оставляем доступ по IP."
+    echo "  Включить HTTPS позже: bash ${INSTALL_DIR}/install.sh --domain <домен> --email <email>"
+  elif ask_yes_no "  Подключить домен и HTTPS сейчас? [y/N]: " "N"; then
+    while true; do
+      prompt_input "  Домен (например, calendar.school42.ru): " RAW_DOMAIN ""
+      NORMALIZED_DOMAIN="$(normalize_domain "$RAW_DOMAIN")"
+      if is_valid_domain "$NORMALIZED_DOMAIN"; then
+        DOMAIN_NAME="$NORMALIZED_DOMAIN"
+        break
+      fi
+      log_err "  Некорректное доменное имя «${RAW_DOMAIN}». Пример: calendar.school42.ru"
+    done
+    echo "  Домен принят: ${DOMAIN_NAME}"
+  else
+    echo "  Оставляем доступ по IP. Включить HTTPS позже:"
+    echo "    bash ${INSTALL_DIR}/install.sh --domain <ваш домен> --email <ваш email>"
+  fi
+fi
+
+if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ] && [ "$HTTPS_ALREADY" != "1" ]; then
   if ! command -v apt-get >/dev/null 2>&1; then
     log_warn "Автонастройка Nginx поддерживается на системах с apt (Ubuntu/Debian)."
     log_warn "Руководство по ручной настройке: docs/deployment.md"
@@ -730,11 +779,19 @@ if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ]; then
   fi
 fi
 
-if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ]; then
+if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ] && [ "$HTTPS_ALREADY" != "1" ]; then
   # --- Email для Let's Encrypt ---
   if [ -z "$CERT_EMAIL" ]; then
     default_cert_email="${CERT_EMAIL:-$SMTP_USER_SAVED}"
-    prompt_input "${YELLOW}  [НЕОБЯЗАТЕЛЬНО] Email для уведомлений Let's Encrypt [Enter = ${default_cert_email:-пропустить}]: ${NC}" CERT_EMAIL "$default_cert_email"
+    if [ -n "$default_cert_email" ]; then
+      email_hint="  Email для Let's Encrypt [Enter = ${default_cert_email}, «-» — без email]: "
+    else
+      email_hint="  Email для Let's Encrypt (Enter — без email): "
+    fi
+    prompt_input "$email_hint" CERT_EMAIL "$default_cert_email"
+    if [ "$CERT_EMAIL" = "-" ]; then
+      CERT_EMAIL=""
+    fi
   fi
   if [ -n "$CERT_EMAIL" ] && ! is_valid_email "$CERT_EMAIL"; then
     log_warn "Email «${CERT_EMAIL}» выглядит некорректно — сертификат будет запрошен без email."
@@ -763,8 +820,8 @@ if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ]; then
   fi
 fi
 
-if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ]; then
-  echo "  Установка Nginx и Certbot..."
+if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ] && [ "$HTTPS_ALREADY" != "1" ]; then
+  echo "  Устанавливаю Nginx и Certbot..."
   apt_update
   if ! apt_install nginx certbot python3-certbot-nginx; then
     log_err "Не удалось установить Nginx/Certbot (пакеты nginx, certbot, python3-certbot-nginx)."
@@ -840,7 +897,7 @@ EOF
     log_ok "В firewalld открыты http/https."
   fi
 
-  echo "  Запрос SSL-сертификата Let's Encrypt для ${DOMAIN_NAME}..."
+  echo "  Запрашиваю сертификат Let's Encrypt для ${DOMAIN_NAME}..."
   CERTBOT_ARGS=(--nginx -d "$DOMAIN_NAME" --non-interactive --agree-tos --redirect)
   if [ -n "$CERT_EMAIL" ]; then
     CERTBOT_ARGS+=(-m "$CERT_EMAIL")
@@ -879,28 +936,33 @@ EOF
   fi
 fi
 
-# При повторном запуске без --domain не сбрасываем уже настроенный HTTPS:
-# определяем адрес по существующему конфигу Nginx.
-if [ -z "$FINAL_URL" ] && [ "$(read_env_value "$ENV_FILE" BIND_HOST)" = "127.0.0.1" ]; then
-  EXISTING_NGINX_CONF="${NGINX_SITES_AVAILABLE_DIR}/interactive-calendar"
-  if [ -f "$EXISTING_NGINX_CONF" ]; then
-    DETECTED_DOMAIN="$(awk '/^[[:space:]]*server_name/ {print $2; exit}' "$EXISTING_NGINX_CONF" | tr -d ';' || true)"
-    if [ -n "$DETECTED_DOMAIN" ]; then
-      if "${SUDO[@]}" test -f "${LETSENCRYPT_LIVE_DIR}/${DETECTED_DOMAIN}/fullchain.pem" 2>/dev/null; then
-        FINAL_URL="https://${DETECTED_DOMAIN}"
-      else
-        FINAL_URL="http://${DETECTED_DOMAIN}"
-      fi
+if [ "$HTTPS_ALREADY" = "1" ]; then
+  FINAL_URL="https://${DOMAIN_NAME}"
+  # На всякий случай сохраняем приватную публикацию порта и доверие к Nginx.
+  if [ "$(read_env_value "$ENV_FILE" BIND_HOST)" != "127.0.0.1" ] || [ "$(read_env_value "$ENV_FILE" TRUST_PROXY)" != "1" ]; then
+    set_env_key "$ENV_FILE" "BIND_HOST" "127.0.0.1"
+    set_env_key "$ENV_FILE" "TRUST_PROXY" "1"
+    "${COMPOSE[@]}" up -d
+    if ! wait_for_health 60; then
+      log_warn "Приложение не ответило после перезапуска — проверьте docker compose logs."
     fi
   fi
 fi
 
 if [ -z "$FINAL_URL" ]; then
-  SERVER_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")"
-  FINAL_URL="http://${SERVER_IP}:${APP_PORT}"
-  if [ "$(read_env_value "$ENV_FILE" BIND_HOST)" = "127.0.0.1" ]; then
-    log_warn "Порт приложения привязан к 127.0.0.1, но конфиг Nginx не найден."
-    log_warn "Запустите установщик с --domain <ваш домен>, чтобы настроить внешний доступ."
+  if [ -n "$EXISTING_DOMAIN" ]; then
+    if [ "$EXISTING_CERT" = "1" ]; then
+      FINAL_URL="https://${EXISTING_DOMAIN}"
+    else
+      FINAL_URL="http://${EXISTING_DOMAIN}"
+    fi
+  else
+    SERVER_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")"
+    FINAL_URL="http://${SERVER_IP}:${APP_PORT}"
+    if [ "$(read_env_value "$ENV_FILE" BIND_HOST)" = "127.0.0.1" ]; then
+      log_warn "Порт приложения привязан к 127.0.0.1, но конфиг Nginx не найден."
+      log_warn "Запустите установщик с --domain <ваш домен>, чтобы настроить внешний доступ."
+    fi
   fi
 fi
 
@@ -909,7 +971,11 @@ fi
 # ------------------------------------------------------------------------------
 echo ""
 log_info "================================================================="
-log_info "${BOLD}✓ Установка успешно завершена!${NC}"
+if [[ "$FINAL_URL" == https://* ]]; then
+  log_info "${BOLD}✓ Установка успешно завершена!${NC}"
+else
+  log_info "${BOLD}✓ Установка завершена — календарь работает!${NC}"
+fi
 echo ""
 echo -e "  Адрес приложения:   ${BOLD}${CYAN}${FINAL_URL}${NC}"
 echo -e "  Папка проекта:      ${BOLD}${INSTALL_DIR}${NC}"
@@ -930,6 +996,12 @@ if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ]; then
 fi
 echo ""
 if [[ "$FINAL_URL" == http://* ]]; then
-  log_warn "Приложение опубликовано по HTTP. Для HTTPS запустите установщик снова с --domain <ваш домен>."
+  if [ -n "$DOMAIN_NAME" ] || [ -n "$EXISTING_DOMAIN" ]; then
+    echo "  Домен настроен, но HTTPS-сертификат не выпущен."
+    echo -e "  Повторите выпуск: ${YELLOW}sudo certbot --nginx -d ${DOMAIN_NAME:-$EXISTING_DOMAIN}${NC}"
+  else
+    echo "  Доступ по IP без HTTPS."
+    echo -e "  Включить домен и HTTPS: ${YELLOW}bash ${INSTALL_DIR}/install.sh --domain calendar.example.ru --email admin@example.ru${NC}"
+  fi
 fi
 log_info "================================================================="

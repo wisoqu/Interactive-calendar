@@ -71,5 +71,5 @@ In production the application container is published on `127.0.0.1:3000` and exp
 ## 4. Verification & CI
 
 * `tests/verify.ts` – 26 integration/unit checks (crypto, calendar math, auth, CSRF, RBAC, events, password reset, WAL/cascade, rate limits, proxy trust, HSTS, payload limits, schema).
-* `tests/install-sim.sh` – 50 network-free checks of `install.sh` and `backup.sh`: a temporary local git mirror, mocked `docker`, `apt-get`, `nginx`, `certbot`, `curl` and `getent`, and an interactive Q&A run through a real pty.
+* `tests/install-sim.sh` – 68 network-free checks of `install.sh` and `backup.sh`: a temporary local git mirror, mocked `docker`, `apt-get`, `nginx`, `certbot`, `curl` and `getent`, and an interactive Q&A run through a real pty.
 * `.github/workflows/ci.yml` – runs TypeScript, tests and installer simulation on Node 22 and 24, then builds the production Docker image and smoke-tests `/api/health/db` plus the SPA.
