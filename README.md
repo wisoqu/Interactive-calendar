@@ -122,8 +122,10 @@ bash install.sh --yes --no-swap \
 sudo DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold --configure -a
 sudo apt-get -f install -y
 sudo apt-get install -y nginx certbot python3-certbot-nginx
-bash /opt/interactive-calendar/install.sh --domain <домен> --email <email>
+bash /opt/interactive-calendar/install.sh
 ```
+
+Установщик спросит домен и email. В командах ниже угловые скобки не нужны: `<...>` — это только обозначение placeholder, а не часть команды; bash воспринимает `<` как перенаправление ввода.
 
 База данных, `.env` и текущий доступ по IP при этом не затрагиваются. Низкая загрузка CPU в этот момент нормальна: apt/dpkg не работают, а сразу возвращают ошибку — компиляция и сборка контейнера уже завершены.
 

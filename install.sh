@@ -74,18 +74,18 @@ usage() {
 
 Параметры:
   -y, --yes                 Не задавать вопросов, использовать значения по умолчанию
-      --dir <путь>          Каталог установки (по умолчанию /opt/interactive-calendar)
-      --domain <домен>      Домен для Nginx + Let's Encrypt (например, calendar.school42.ru)
-      --email <адрес>       Email для Let's Encrypt (можно пропустить)
-      --port <номер>        Порт приложения на сервере (по умолчанию 3000)
-      --ref <ветка/тег>     Ветка или тег репозитория (по умолчанию main)
+      --dir ПУТЬ            Каталог установки (по умолчанию /opt/interactive-calendar)
+      --domain ДОМЕН        Домен для Nginx + Let's Encrypt (например, calendar.school42.ru)
+      --email АДРЕС         Email для Let's Encrypt (например, admin@school42.ru; можно пропустить)
+      --port ПОРТ           Порт приложения на сервере (по умолчанию 3000)
+      --ref ВЕТКА           Ветка или тег репозитория (по умолчанию main)
       --no-ssl              Не настраивать домен, Nginx и HTTPS
       --no-swap             Не предлагать создание файла подкачки
-      --smtp-host <host>    SMTP-сервер для писем восстановления пароля
-      --smtp-port <порт>    Порт SMTP (по умолчанию 587, либо 465 для SSL)
-      --smtp-user <логин>   Логин почты
-      --smtp-pass <пароль>  Пароль приложения SMTP
-      --smtp-from <строка>  Отправитель писем
+      --smtp-host ХОСТ      SMTP-сервер для писем восстановления пароля
+      --smtp-port ПОРТ      Порт SMTP (по умолчанию 587, либо 465 для SSL)
+      --smtp-user ЛОГИН     Логин почты
+      --smtp-pass ПАРОЛЬ    Пароль приложения SMTP
+      --smtp-from СТРОКА    Отправитель писем
       --reconfigure-env     Перезаписать существующий .env
   -h, --help                Показать эту справку
 
@@ -799,7 +799,8 @@ else
   echo "  Нужны A-запись домена на этот сервер и открытые порты 80 и 443."
   if [ "$ASSUME_YES" = "1" ]; then
     echo "  Домен не указан (--yes без --domain): оставляем доступ по IP."
-    echo "  Включить HTTPS позже: bash ${INSTALL_DIR}/install.sh --domain <домен> --email <email>"
+    echo "  Включить HTTPS позже: bash ${INSTALL_DIR}/install.sh"
+    echo "  (установщик спросит домен и email для Let's Encrypt)"
   elif ask_yes_no "  Подключить домен и HTTPS сейчас? [y/N]: " "N"; then
     while true; do
       prompt_input "  Домен (например, calendar.school42.ru): " RAW_DOMAIN ""
@@ -813,7 +814,8 @@ else
     echo "  Домен принят: ${DOMAIN_NAME}"
   else
     echo "  Оставляем доступ по IP. Включить HTTPS позже:"
-    echo "    bash ${INSTALL_DIR}/install.sh --domain <ваш домен> --email <ваш email>"
+    echo "    bash ${INSTALL_DIR}/install.sh"
+    echo "  (установщик спросит домен и email для Let's Encrypt)"
   fi
 fi
 
@@ -1017,7 +1019,7 @@ if [ -z "$FINAL_URL" ]; then
     FINAL_URL="http://${SERVER_IP}:${APP_PORT}"
     if [ "$(read_env_value "$ENV_FILE" BIND_HOST)" = "127.0.0.1" ]; then
       log_warn "Порт приложения привязан к 127.0.0.1, но конфиг Nginx не найден."
-      log_warn "Запустите установщик с --domain <ваш домен>, чтобы настроить внешний доступ."
+      log_warn "Запустите установщик (он спросит домен), чтобы настроить внешний доступ."
     fi
   fi
 fi
@@ -1056,7 +1058,12 @@ echo ""
 if [[ "$FINAL_URL" == http://* ]]; then
   if [ "$HTTPS_FAILED" = "1" ] && [ -n "$FAILED_DOMAIN" ]; then
     echo "  HTTPS не настроен: не удалось установить Nginx/Certbot."
-    echo -e "  Повторите: ${YELLOW}bash ${INSTALL_DIR}/install.sh --domain ${FAILED_DOMAIN} --email ${CERT_EMAIL:-<email>}${NC}"
+    retry_cmd="bash ${INSTALL_DIR}/install.sh --domain ${FAILED_DOMAIN}"
+    if [ -n "$CERT_EMAIL" ]; then
+      printf -v retry_email_q '%q' "$CERT_EMAIL"
+      retry_cmd+=" --email ${retry_email_q}"
+    fi
+    echo -e "  Повторите: ${YELLOW}${retry_cmd}${NC}"
   elif [ -n "$DOMAIN_NAME" ] || [ -n "$EXISTING_DOMAIN" ]; then
     echo "  Домен настроен, но HTTPS-сертификат не выпущен."
     echo -e "  Повторите выпуск: ${YELLOW}sudo certbot --nginx -d ${DOMAIN_NAME:-$EXISTING_DOMAIN}${NC}"

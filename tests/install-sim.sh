@@ -39,6 +39,8 @@ check() {
     pass=$((pass + 1))
   else
     echo "  [FAIL] $desc"
+    # Аннотация видна в GitHub Actions и через API, даже если лог недоступен.
+    echo "::error title=Installer simulation::${desc}"
     fail=$((fail + 1))
   fi
 }
@@ -399,6 +401,10 @@ check "apt lock: does not request a certificate" \
   bash -c '! grep -q "Запрашиваю сертификат" "$1"' _ "$WORK/s10.log"
 check "apt lock: prints the exact retry command" \
   grep -q "install.sh --domain calendar.test" "$WORK/s10.log"
+check "apt lock: retry command includes the email" \
+  grep -q -- "--email admin@calendar.test" "$WORK/s10.log"
+check "apt lock: retry command has no angle-bracket placeholders" \
+  bash -c '! grep -q "<email>" "$1"' _ "$WORK/s10.log"
 
 # --- Scenario 11: interrupted dpkg --------------------------------------------
 echo "11. interrupted dpkg: repair with dpkg --configure -a and continue"
@@ -417,6 +423,11 @@ check "dpkg repair: HTTPS is configured" \
   grep -q "https://calendar.test" "$WORK/s11.log"
 check "dpkg repair: apt install retried after the repair" \
   [ "$(grep -c 'install -y -qq nginx' "$WORK/apt-s11.log")" -eq 2 ]
+
+check "printed commands contain no copy-paste-unsafe placeholders" \
+  bash -c '! grep -qE -- "--domain <|--email <" "$1"' _ "$REPO_ROOT/install.sh"
+check "IP-only summary contains no angle-bracket placeholders" \
+  bash -c '! grep -qE "<(домен|email|ваш)" "$1"' _ "$WORK/s7.log"
 
 echo
 if [ "$fail" -eq 0 ]; then

@@ -177,7 +177,7 @@ Local checks (no server required):
 npm ci
 npm run lint          # strict TypeScript
 npm test              # 26 integration/unit checks
-npm run test:install  # 85 installer checks (no network, mocked docker/nginx/certbot, interactive pty, backup)
+npm run test:install  # 89 installer checks (no network, mocked docker/nginx/certbot, interactive pty, backup)
 npm run check         # all of the above + production build
 ```
 
