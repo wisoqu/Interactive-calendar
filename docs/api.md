@@ -3,9 +3,16 @@
 All endpoints accept and return JSON (`application/json`). Every API route is mounted under `/api/...` (used by the React SPA client), with direct root aliases (`/auth/...`, `/classrooms/...`, `/health`) also available. Unknown `/api/*` paths return `404` JSON instead of SPA HTML.
 
 ### Authentication & Security Model
-* **Sessions**: Strictly cookie-based using the `session_id` `HttpOnly` cookie (`SameSite=Lax`, plus `Secure` when served over HTTPS / `X-Forwarded-Proto: https`, 7-day `Max-Age`). Session tokens are **never** exposed in JSON responses and are **never** accepted from `X-Session-Token` headers.
+* **Sessions**: Strictly cookie-based using the `session_id` `HttpOnly` cookie (`SameSite=Lax`, 7-day `Max-Age`). The `Secure` flag is added when the request is HTTPS, either directly or via `X-Forwarded-Proto: https` **from a trusted proxy** (`TRUST_PROXY=1`, set by `install.sh` for the Nginx profile). Session tokens are **never** exposed in JSON responses and are **never** accepted from `X-Session-Token` headers.
+* **Transport hardening**: over HTTPS the server also sends `Strict-Transport-Security: max-age=15552000; includeSubDomains`. With `TRUST_PROXY=0` (direct `IP:3000` access) `X-Forwarded-*` headers are ignored entirely.
 * **CSRF Protection**: State-changing requests (`POST`, `PATCH`, `PUT`, `DELETE`) verify `Origin` / `Referer` against the request `Host` whenever those headers are present.
-* **Rate Limiting**: Sliding-window per-IP rate limits protect login, registration, password reset request/confirmation, and invite-code joining (`429 Too Many Requests` with `code: "RATE_LIMITED"`).
+* **Rate Limiting**: Sliding-window limits return `429 Too Many Requests` with `code: "RATE_LIMITED"` and a `Retry-After` header. Keys are scoped so a shared school NAT does not lock out an entire class:
+  * login — `IP + username`, 20 / 15 min;
+  * registration — `IP`, 50 / hour;
+  * password-reset request — `IP + email`, 5 / 15 min (plus a 100 / 15 min per-IP anti-abuse cap);
+  * password-reset confirm — `IP + email`, 15 / 15 min;
+  * invite-code join — `IP + authenticated user`, 25 / 15 min.
+  Values are tunable via `RATE_LIMIT_LOGIN_MAX`, `RATE_LIMIT_REGISTER_MAX`, `RATE_LIMIT_RESET_REQUEST_MAX`, `RATE_LIMIT_RESET_CONFIRM_MAX`, `RATE_LIMIT_JOIN_MAX`.
 
 ---
 
@@ -264,7 +271,11 @@ All endpoints accept and return JSON (`application/json`). Every API route is mo
 ## 5. Health & Error Format
 
 * `GET /api/health` (alias `/health`) -> `{ "status": "healthy", "timestamp": "..." }`
-* `GET /api/health/db` (alias `/health/db`) -> `{ "status": "healthy", "database": "sqlite", "connection": "ok" }`
+* `GET /api/health/db` (alias `/health/db`) -> `{ "status": "healthy", "database": "sqlite", "connection": "ok" }` (used by Docker healthcheck and `install.sh`)
+* Malformed JSON returns `400 INVALID_JSON`; bodies above `256kb` return `413 PAYLOAD_TOO_LARGE`:
+  ```json
+  { "code": "PAYLOAD_TOO_LARGE", "detail": "Размер запроса превышает допустимый предел." }
+  ```
 * All `4xx` / `5xx` errors return structured JSON with a machine-readable `code` (mapped to RU/EN on the frontend) and a human-readable `detail`:
   ```json
   {

@@ -1,21 +1,27 @@
 # Multi-stage Dockerfile for Interactive School Calendar (Express + React + SQLite)
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
 # Native build toolchain for better-sqlite3 across x86_64 and ARM64 VPS
 RUN apk add --no-cache python3 make g++
 
-# Copy dependency manifests and install exact locked dependencies
+# Copy dependency manifests and install exact locked dependencies.
+# If the base image ships Node headers, point node-gyp at them so better-sqlite3
+# can still compile when GitHub/nodejs.org prebuild downloads are unavailable.
 COPY package*.json ./
-RUN npm ci
+RUN if [ -d /usr/local/include/node ]; then \
+      npm_config_nodedir=/usr/local npm ci --no-audit --no-fund; \
+    else \
+      npm ci --no-audit --no-fund; \
+    fi
 
 # Copy application source and compile frontend + server bundle, then prune devDependencies
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
 # Minimal production runtime image
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 
 WORKDIR /app
 

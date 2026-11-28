@@ -31,7 +31,7 @@ Maps a `User` to a `Classroom` with a specific access role.
 * `id`: unique association identifier (`mem_...`).
 * `user_id`: references `users(id) ON DELETE CASCADE`.
 * `classroom_id`: references `classrooms(id) ON DELETE CASCADE`.
-* `role`: `MemberRole` (`owner` | `admin` | `member`) enforced via `CHECK` constraint.
+* `role`: `MemberRole` (`owner` | `admin` | `member`); enforced by a SQLite `CHECK` constraint on newly created databases and by strict API validation for databases created by earlier versions.
 * `created_at`: UTC ISO-8601 timestamp of enrollment.
 * *Constraint*: Unique pair `(user_id, classroom_id)`.
 
@@ -96,4 +96,7 @@ One-time 6-digit email verification code for password recovery.
    * Reset codes lock out after 5 invalid attempts (`429`, `RESET_CODE_LOCKED`).
    * Confirming a password reset marks the verification code as used and immediately revokes all active sessions of that user (`revoked_at`).
 8. **Periodic Hygiene**:
-   * Expired/revoked sessions and expired/consumed/locked reset codes are periodically purged from SQLite.
+   * Expired/revoked sessions and expired/consumed/locked reset codes are periodically purged from SQLite at startup and every hour.
+
+9. **Session Semantics**:
+   * A login creates a new server-side session row with a random `sess_...` token (7-day TTL). Logout marks that session as revoked; a successful password reset revokes **all** sessions of the user.

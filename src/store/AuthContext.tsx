@@ -6,6 +6,8 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   classrooms: Classroom[];
+  /** True once the first classroom list request has completed (successfully or not). */
+  classroomsLoaded: boolean;
   currentClassroom: Classroom | null;
   applyUser: (nextUser: User) => void;
   refreshUser: (throwOnError?: boolean) => Promise<void>;
@@ -29,11 +31,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
+  const [classroomsLoaded, setClassroomsLoaded] = useState(false);
   const [currentClassroom, setCurrentClassroom] = useState<Classroom | null>(null);
   const inFlightClassroomsRef = useRef<Promise<Classroom[]> | null>(null);
+  // Keep the latest loading flag available without making refreshUser unstable.
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
 
   const applyUser = useCallback((nextUser: User) => {
     setUser(nextUser);
+    setClassrooms([]);
+    setClassroomsLoaded(false);
+    setCurrentClassroom(null);
     setLoading(false);
   }, []);
 
@@ -46,8 +55,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (e instanceof ApiError && e.status === 401) {
         setUser(null);
         setClassrooms([]);
+        setClassroomsLoaded(false);
         setCurrentClassroom(null);
-      } else if (loading) {
+      } else if (loadingRef.current) {
         setUser(null);
       }
       if (throwOnError) {
@@ -56,7 +66,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setLoading(false);
     }
-  }, [loading]);
+  }, []);
 
   const refreshClassrooms = useCallback(async (): Promise<Classroom[]> => {
     if (inFlightClassroomsRef.current) {
@@ -87,6 +97,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return [];
       } finally {
         inFlightClassroomsRef.current = null;
+        setClassroomsLoaded(true);
       }
     })();
 
@@ -113,6 +124,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setUser(null);
       setClassrooms([]);
+      setClassroomsLoaded(false);
       setCurrentClassroom(null);
       if (window.location.hash) {
         window.history.replaceState(null, "", window.location.pathname);
@@ -149,6 +161,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return onUnauthorizedSession(() => {
       setUser(null);
       setClassrooms([]);
+      setClassroomsLoaded(false);
       setCurrentClassroom(null);
     });
   }, []);
@@ -175,6 +188,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (err instanceof ApiError && err.status === 401) {
               setUser(null);
               setClassrooms([]);
+              setClassroomsLoaded(false);
               setCurrentClassroom(null);
             }
           });
@@ -192,6 +206,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         loading,
         classrooms,
+        classroomsLoaded,
         currentClassroom,
         applyUser,
         refreshUser,

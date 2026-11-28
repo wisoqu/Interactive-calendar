@@ -29,6 +29,7 @@ docs
 tests
 README.md
 install.sh
+backup.sh
 docker-compose.yml
 
 # Logs & editor metadata

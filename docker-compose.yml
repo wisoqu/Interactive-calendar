@@ -5,13 +5,26 @@ services:
       dockerfile: Dockerfile
     container_name: school_calendar_app
     restart: unless-stopped
+    # Use tini as PID 1 so SIGTERM is forwarded to Node for a clean shutdown
+    init: true
+    stop_grace_period: 15s
     ports:
+      # BIND_HOST=127.0.0.1 when the app is published through Nginx/HTTPS
+      # so port 3000 cannot be reached directly from the internet.
       - "${BIND_HOST:-0.0.0.0}:${PORT:-3000}:${PORT:-3000}"
     env_file:
       - .env
     environment:
       - NODE_ENV=production
       - SQLITE_DB_PATH=/app/data/calendar_db.sqlite
+      # Always bind inside the container; BIND_HOST only controls the host port.
+      - LISTEN_HOST=0.0.0.0
     volumes:
       # Mount a directory (not a single file) so SQLite WAL/SHM files work reliably
       - ./data:/app/data
+    logging:
+      # Prevent container logs from filling a small VPS disk
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -80,7 +80,13 @@ export function createClassroomRouter({
   const router = express.Router();
   const authenticateUser = createAuthenticateUser(db);
   const loadClassroomMember = createLoadClassroomMember(db);
-  const joinLimiter = createRateLimiter(rateLimits.joinClassroom, enableRateLimit);
+  // Keyed by authenticated user (not just IP) because an entire class can share one
+  // school NAT address; each student must get their own join budget.
+  const joinLimiter = createRateLimiter(
+    rateLimits.joinClassroom,
+    enableRateLimit,
+    (req) => (req as AppRequest).user?.id || ""
+  );
 
   // List my classrooms
   router.get("/", authenticateUser, (rawReq, res) => {

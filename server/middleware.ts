@@ -14,19 +14,70 @@ import type {
 export const SESSION_COOKIE_NAME = "session_id";
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+function envPositiveInt(name: string, fallback: number): number {
+  const parsed = parseInt(process.env[name] || "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Sliding-window limits. Keying strategy matters for real schools: dozens of
+ * students often share one NAT/public IP, so account-scoped routes are keyed by
+ * the submitted username/email and invite-code joins by the authenticated user.
+ * Optional RATE_LIMIT_*_MAX env variables let administrators tune the limits.
+ */
 export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
-  login: { windowMs: 15 * 60 * 1000, max: 20 },
-  register: { windowMs: 60 * 60 * 1000, max: 15 },
-  resetRequest: { windowMs: 15 * 60 * 1000, max: 5 },
-  resetConfirm: { windowMs: 15 * 60 * 1000, max: 15 },
-  joinClassroom: { windowMs: 15 * 60 * 1000, max: 25 },
+  login: { windowMs: 15 * 60 * 1000, max: envPositiveInt("RATE_LIMIT_LOGIN_MAX", 20) },
+  register: { windowMs: 60 * 60 * 1000, max: envPositiveInt("RATE_LIMIT_REGISTER_MAX", 50) },
+  resetRequest: { windowMs: 15 * 60 * 1000, max: envPositiveInt("RATE_LIMIT_RESET_REQUEST_MAX", 5) },
+  resetConfirm: { windowMs: 15 * 60 * 1000, max: envPositiveInt("RATE_LIMIT_RESET_CONFIRM_MAX", 15) },
+  joinClassroom: {
+    windowMs: 15 * 60 * 1000,
+    max: envPositiveInt("RATE_LIMIT_JOIN_MAX", 25),
+  },
 };
 
-export const securityHeadersMiddleware: RequestHandler = (_req, res, next) => {
+/** Normalizes an arbitrary request body field (username/email) for use as a limiter key. */
+export function bodyFieldKey(field: string): (req: Request) => string {
+  return (req) => {
+    const raw = (req.body as Record<string, unknown> | undefined)?.[field];
+    return typeof raw === "string" ? raw.trim().toLowerCase().slice(0, 254) : "";
+  };
+}
+
+/**
+ * Returns true when the request reached Express over HTTPS, either directly
+ * (TLS-terminated by Node) or through a trusted reverse proxy that sent
+ * `X-Forwarded-Proto: https` (Nginx in the official install script).
+ */
+export function isSecureRequest(req: Request): boolean {
+  if (req.secure) {
+    return true;
+  }
+  // Only honor X-Forwarded-Proto when proxy trust is explicitly enabled.
+  // With TRUST_PROXY=0 (app published directly on IP:3000) a client-supplied
+  // header must not influence cookie security or HSTS decisions.
+  const trustProxy = req.app?.get?.("trust proxy");
+  if (!trustProxy) {
+    return false;
+  }
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protoHeader = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  return (
+    typeof protoHeader === "string" &&
+    protoHeader.split(",")[0].trim().toLowerCase() === "https"
+  );
+}
+
+export const securityHeadersMiddleware: RequestHandler = (req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  // Only advertise HSTS over an actual HTTPS connection (never over plain HTTP,
+  // where browsers would otherwise cache the upgrade and lock users out).
+  if (isSecureRequest(req)) {
+    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+  }
   next();
 };
 
@@ -52,16 +103,10 @@ export const cookieParserMiddleware: RequestHandler = (req, _res, next) => {
 };
 
 export function getCookieOptions(req: Request, includeMaxAge = true): CookieOptions {
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  const protoHeader = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
-  const isHttps =
-    req.secure ||
-    (typeof protoHeader === "string" && protoHeader.split(",")[0].trim().toLowerCase() === "https");
-
   const options: CookieOptions = {
     httpOnly: true,
     sameSite: "lax",
-    secure: isHttps,
+    secure: isSecureRequest(req),
     path: "/",
   };
 

@@ -41,7 +41,7 @@ function buildHashRoute(tab: ActiveTab, classroomId: string | null): string {
 }
 
 const ClassroomDashboard: React.FC = () => {
-  const { user, classrooms, currentClassroom, selectClassroom, logout } = useAuth();
+  const { user, classrooms, classroomsLoaded, currentClassroom, selectClassroom, logout } = useAuth();
   const { lang, setLang, theme, setTheme, t } = useThemeLanguage();
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => parseHashRoute().tab);
   const [classDropdownOpen, setClassDropdownOpen] = useState(false);
@@ -83,13 +83,24 @@ const ClassroomDashboard: React.FC = () => {
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, [classrooms, currentClassroom?.id, selectClassroom]);
 
-  // Keep URL hash synchronized with current tab & classroom
+  // If a deep link points to a classroom the user cannot open (or none is left),
+  // fall back to the overview instead of keeping an unusable hash.
   useEffect(() => {
+    if (classroomsLoaded && !currentClassroom && activeTab !== "home") {
+      setActiveTab("home");
+    }
+  }, [classroomsLoaded, currentClassroom, activeTab]);
+
+  // Keep URL hash synchronized with current tab & classroom.
+  // Wait for the classroom list: rewriting the hash too early would destroy a
+  // deep link such as #/classroom/cr_x/calendar before it can be resolved.
+  useEffect(() => {
+    if (!classroomsLoaded) return;
     const targetHash = buildHashRoute(activeTab, currentClassroom?.id ?? null);
     if (window.location.hash !== targetHash) {
       window.history.pushState(null, "", targetHash);
     }
-  }, [activeTab, currentClassroom?.id]);
+  }, [activeTab, currentClassroom?.id, classroomsLoaded]);
 
   // Reset tab if current classroom changes and user is no longer owner on Settings tab
   useEffect(() => {

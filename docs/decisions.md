@@ -32,5 +32,25 @@ This document records the key engineering decisions behind the Interactive Calen
 ---
 
 ## ADR-5: Hardened Non-Root Production Container Without Runtime Dev Dependencies
-* **Decision**: Load `vite` only via dynamic `await import("vite")` in development mode, prune dev dependencies (`npm prune --omit=dev`) in the multi-stage `Dockerfile`, bind the container process to non-root user `node` via `docker-entrypoint.sh`, and default to `BIND_HOST=127.0.0.1` when installed behind Nginx HTTPS.
+* **Decision**: Load `vite` only via dynamic `await import("vite")` in development mode, prune dev dependencies (`npm prune --omit=dev`) in the multi-stage `Dockerfile`, bind the container process to non-root user `node` via `docker-entrypoint.sh`, and have `install.sh` set `BIND_HOST=127.0.0.1` when the HTTPS profile is configured so the published port is reachable only through Nginx.
 * **Consequence**: The production runtime image contains only the 4 runtime dependencies (`better-sqlite3`, `dotenv`, `express`, `nodemailer`), starts cleanly without `vite` installed, reduces container attack surface, and prevents bypassing Nginx TLS when HTTPS is configured.
+
+---
+
+## ADR-6: Explicit Proxy Trust and Separate Host/Listen Bind Addresses
+* **Decision**: Treat `BIND_HOST` as a Docker Compose-only value for the *published* host interface, and `LISTEN_HOST` as the address the Node process binds to inside the container (always `0.0.0.0` in Docker). Gate `X-Forwarded-Proto` handling (`Secure` cookies and HSTS) behind `TRUST_PROXY`, which `install.sh` sets to `1` for the Nginx/HTTPS profile and `0` for direct `IP:3000` access.
+* **Context**: Docker forwards published ports to the container's bridge interface, so binding Node to `127.0.0.1` inside the container breaks all traffic. Conversely, always trusting `X-Forwarded-*` on a directly exposed port lets clients spoof their IP (rate-limit bypass) and influence cookie security.
+* **Consequence**: The same image works both behind Nginx and directly; HTTPS gets strict HSTS and `Secure` cookies; direct HTTP never emits HSTS or trusts spoofable headers.
+
+---
+
+## ADR-7: NAT-Aware Rate Limiting Keyed by Account and User
+* **Decision**: Key login attempts by `IP + username`, password-reset requests/confirmations by `IP + email` (with a broad `100/IP/15 min` anti-abuse cap on requests), and invite-code joins by `IP + authenticated user`. Provide `RATE_LIMIT_*_MAX` environment overrides.
+* **Context**: A school class typically shares one public NAT address; a naive per-IP limit of 20 logins per 15 minutes would lock out the class during the first lesson.
+* **Consequence**: Individual accounts stay protected against brute force and reset-code spam, while 30 students behind one NAT can authenticate and join independently.
+
+---
+
+## ADR-8: Executable Deployment Verification Instead of Documentation-Only Claims
+* **Decision**: Keep `tests/verify.ts` (application behavior) and `tests/install-sim.sh` (installer behavior with mocked Docker/Nginx/Certbot) as first-class, runnable artifacts, and add a GitHub Actions pipeline that also builds the real Docker image and smoke-tests `/api/health/db` plus the SPA.
+* **Consequence**: Installation and runtime regressions are caught before a server is touched, and the README/deployment guide claims are continuously checked against executable behavior.
