@@ -39,6 +39,8 @@ check() {
     pass=$((pass + 1))
   else
     echo "  [FAIL] $desc"
+    # Аннотация видна в GitHub Actions и через API, даже если лог недоступен.
+    echo "::error title=Installer simulation::${desc}"
     fail=$((fail + 1))
   fi
 }
