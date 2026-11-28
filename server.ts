@@ -30,11 +30,41 @@ const DEFAULT_PORT = (() => {
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? parsed : 3000;
 })();
 
+// Address the Node process listens on *inside* its environment. Keep 0.0.0.0 in
+// Docker: the container must accept traffic from the Docker bridge even when the
+// published host port is bound to 127.0.0.1 (BIND_HOST is a Compose-only value).
+const LISTEN_HOST = process.env.LISTEN_HOST?.trim() || "0.0.0.0";
+
 const DEFAULT_SQLITE_DB_FILE = process.env.SQLITE_DB_PATH
   ? path.resolve(process.cwd(), process.env.SQLITE_DB_PATH)
   : path.join(process.cwd(), "data", "calendar_db.sqlite");
 
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Resolves Express "trust proxy" from TRUST_PROXY.
+ * - "1" (default, backwards compatible) trusts one reverse proxy hop (Nginx).
+ * - "0"/"false" disables proxy trust so a directly exposed port cannot be
+ *   influenced by spoofed X-Forwarded-* headers (rate-limit / cookie abuse).
+ */
+function resolveTrustProxy(): number | boolean | string {
+  const raw = process.env.TRUST_PROXY?.trim();
+  if (!raw) {
+    return 1;
+  }
+  if (/^(false|0|no|off)$/i.test(raw)) {
+    return false;
+  }
+  if (/^(true|1|yes|on)$/i.test(raw)) {
+    return 1;
+  }
+  const hops = parseInt(raw, 10);
+  if (Number.isFinite(hops) && hops >= 0) {
+    return hops;
+  }
+  // Allow express-style values such as "loopback" or a comma-separated subnet list.
+  return raw;
+}
 
 export async function createServerApp(options: ServerOptions = {}) {
   const dbPath = options.dbPath || DEFAULT_SQLITE_DB_FILE;
@@ -59,7 +89,7 @@ export async function createServerApp(options: ServerOptions = {}) {
 
   const app = express();
   app.disable("x-powered-by");
-  app.set("trust proxy", 1);
+  app.set("trust proxy", resolveTrustProxy());
 
   app.use(securityHeadersMiddleware);
   app.use(express.json({ limit: "256kb" }));
@@ -113,15 +143,34 @@ export async function createServerApp(options: ServerOptions = {}) {
   });
 
   // Global JSON error handler
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("[API ERROR]", err);
+  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
     const status = typeof err?.status === "number" ? err.status : 500;
+    if (status >= 500) {
+      console.error("[API ERROR]", err);
+    } else {
+      console.warn(`[API REJECTED ${status}] ${err?.type || err?.name || "BadRequest"}: ${err?.message || ""}`);
+    }
+    if (status === 400) {
+      res.status(400).json({
+        code: "INVALID_JSON",
+        detail: "Некорректный формат данных запроса.",
+      });
+      return;
+    }
+    if (status === 413) {
+      res.status(413).json({
+        code: "PAYLOAD_TOO_LARGE",
+        detail: "Размер запроса превышает допустимый предел.",
+      });
+      return;
+    }
     res.status(status).json({
-      code: status === 400 ? "INVALID_JSON" : "SERVER_ERROR",
-      detail:
-        status === 400
-          ? "Некорректный формат данных запроса."
-          : "Внутренняя ошибка сервера при обработке запроса.",
+      code: "SERVER_ERROR",
+      detail: "Внутренняя ошибка сервера при обработке запроса.",
     });
   });
 
@@ -165,8 +214,8 @@ export async function createServerApp(options: ServerOptions = {}) {
 
 async function startServer() {
   const instance = await createServerApp();
-  const server = instance.app.listen(DEFAULT_PORT, "0.0.0.0", () => {
-    console.log(`Interactive Calendar server running on http://0.0.0.0:${DEFAULT_PORT}`);
+  const server = instance.app.listen(DEFAULT_PORT, LISTEN_HOST, () => {
+    console.log(`Interactive Calendar server running on http://${LISTEN_HOST}:${DEFAULT_PORT}`);
   });
 
   let shuttingDown = false;

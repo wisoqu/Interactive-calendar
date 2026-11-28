@@ -11,6 +11,7 @@ import {
 } from "../crypto.ts";
 import { isSmtpConfigured, sendResetEmail } from "../mailer.ts";
 import {
+  bodyFieldKey,
   createAuthenticateUser,
   createRateLimiter,
   extractSessionCookie,
@@ -41,10 +42,28 @@ export function createAuthRouter({
   const router = express.Router();
   const authenticateUser = createAuthenticateUser(db);
 
-  const loginLimiter = createRateLimiter(rateLimits.login, enableRateLimit);
+  const loginLimiter = createRateLimiter(
+    rateLimits.login,
+    enableRateLimit,
+    bodyFieldKey("username")
+  );
   const registerLimiter = createRateLimiter(rateLimits.register, enableRateLimit);
-  const resetRequestLimiter = createRateLimiter(rateLimits.resetRequest, enableRateLimit);
-  const resetConfirmLimiter = createRateLimiter(rateLimits.resetConfirm, enableRateLimit);
+  // Per-account limit (5 requests / 15 min) plus a broader per-IP anti-abuse cap so
+  // one host cannot mass-mail reset codes for hundreds of accounts.
+  const resetRequestLimiter = createRateLimiter(
+    rateLimits.resetRequest,
+    enableRateLimit,
+    bodyFieldKey("email")
+  );
+  const resetRequestIpLimiter = createRateLimiter(
+    { windowMs: 15 * 60 * 1000, max: 100 },
+    enableRateLimit
+  );
+  const resetConfirmLimiter = createRateLimiter(
+    rateLimits.resetConfirm,
+    enableRateLimit,
+    bodyFieldKey("email")
+  );
 
   router.get("/config", (_req, res) => {
     res.json({
@@ -224,8 +243,12 @@ export function createAuthRouter({
     res.json({ success: true, message: "Выход выполнен успешно." });
   });
 
-  router.post("/password-reset/request", resetRequestLimiter, (req, res) => {
-    const { email, lang } = req.body || {};
+  router.post(
+    "/password-reset/request",
+    resetRequestIpLimiter,
+    resetRequestLimiter,
+    (req, res) => {
+      const { email, lang } = req.body || {};
     const cleanEmail = typeof email === "string" ? email.trim() : "";
     const emailLang: "ru" | "en" = lang === "en" ? "en" : "ru";
 

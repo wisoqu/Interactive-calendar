@@ -1100,6 +1100,145 @@ async function runAllTests() {
       }
     });
 
+    console.log("\n9. Proxy Trust, HSTS, Payload Limits, Schema & NAT-friendly Rate Limits");
+
+    await runStep("HSTS and Secure cookies only behind a trusted HTTPS proxy", async () => {
+      const proxyDbPath = path.join(tmpDir, "proxy_test.sqlite");
+      const savedTrustProxy = process.env.TRUST_PROXY;
+
+      process.env.TRUST_PROXY = "1";
+      const proxySrv = await startTestServer(proxyDbPath, { enableRateLimit: false });
+      try {
+        // Registrations do not need cookies, but login exposes cookie flags.
+        await apiRequest(proxySrv.baseUrl, "POST", "/api/auth/register", {
+          body: { username: "proxy_user", password: "password123" },
+        });
+        const login = await apiRequest(proxySrv.baseUrl, "POST", "/api/auth/login", {
+          body: { username: "proxy_user", password: "password123" },
+          headers: { "X-Forwarded-Proto": "https" },
+        });
+        assert.equal(login.status, 200);
+        const setCookie = login.res.headers.getSetCookie().join("; ");
+        assert.match(setCookie, /HttpOnly/i);
+        assert.match(setCookie, /Secure/i);
+
+        const httpsHealth = await apiRequest(proxySrv.baseUrl, "GET", "/api/health", {
+          headers: { "X-Forwarded-Proto": "https" },
+        });
+        assert.match(
+          httpsHealth.res.headers.get("strict-transport-security") || "",
+          /max-age=\d+/i
+        );
+        const httpHealth = await apiRequest(proxySrv.baseUrl, "GET", "/api/health");
+        assert.equal(httpHealth.res.headers.get("strict-transport-security"), null);
+      } finally {
+        await proxySrv.close();
+      }
+
+      // Directly exposed port: spoofed X-Forwarded-* headers must be ignored.
+      process.env.TRUST_PROXY = "0";
+      const directSrv = await startTestServer(path.join(tmpDir, "direct_test.sqlite"), {
+        enableRateLimit: false,
+      });
+      try {
+        await apiRequest(directSrv.baseUrl, "POST", "/api/auth/register", {
+          body: { username: "direct_user", password: "password123" },
+        });
+        const spoofed = await apiRequest(directSrv.baseUrl, "POST", "/api/auth/login", {
+          body: { username: "direct_user", password: "password123" },
+          headers: { "X-Forwarded-Proto": "https" },
+        });
+        assert.equal(spoofed.status, 200);
+        assert.doesNotMatch(spoofed.res.headers.getSetCookie().join("; "), /Secure/i);
+        const spoofedHealth = await apiRequest(directSrv.baseUrl, "GET", "/api/health", {
+          headers: { "X-Forwarded-Proto": "https" },
+        });
+        assert.equal(spoofedHealth.res.headers.get("strict-transport-security"), null);
+      } finally {
+        await directSrv.close();
+        if (savedTrustProxy === undefined) delete process.env.TRUST_PROXY;
+        else process.env.TRUST_PROXY = savedTrustProxy;
+      }
+    });
+
+    await runStep("Oversized JSON bodies return 413 PAYLOAD_TOO_LARGE", async () => {
+      const bigDbPath = path.join(tmpDir, "body_limit_test.sqlite");
+      const bigSrv = await startTestServer(bigDbPath, { enableRateLimit: false });
+      try {
+        const big = await apiRequest(bigSrv.baseUrl, "POST", "/api/auth/login", {
+          body: { username: "x".repeat(300_000), password: "y" },
+        });
+        assert.equal(big.status, 413);
+        assert.equal(big.data.code, "PAYLOAD_TOO_LARGE");
+      } finally {
+        await bigSrv.close();
+      }
+    });
+
+    await runStep("SQLite CHECK constraint rejects invalid member roles", async () => {
+      const schemaDbPath = path.join(tmpDir, "schema_test.sqlite");
+      const schemaSrv = await startTestServer(schemaDbPath, { enableRateLimit: false });
+      try {
+        const now = new Date().toISOString();
+        schemaSrv.db
+          .prepare(
+            "INSERT INTO users (id, username, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)"
+          )
+          .run("usr_schema_owner", "schema_owner", null, "x", now);
+        schemaSrv.db
+          .prepare(
+            "INSERT INTO users (id, username, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)"
+          )
+          .run("usr_schema_member", "schema_member", null, "x", now);
+        schemaSrv.db
+          .prepare(
+            `INSERT INTO classrooms (id, name, description, owner_id, invite_code, is_closed, max_members, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`
+          )
+          .run("cr_schema", "Schema", null, "usr_schema_owner", "SCH001", now, now);
+
+        assert.throws(() => {
+          schemaSrv.db
+            .prepare(
+              "INSERT INTO members (id, user_id, classroom_id, role, created_at) VALUES (?, ?, ?, ?, ?)"
+            )
+            .run("mem_x", "usr_schema_member", "cr_schema", "superadmin", now);
+        }, /CHECK constraint failed/i);
+      } finally {
+        await schemaSrv.close();
+      }
+    });
+
+    await runStep("Login rate limit is per username (school NAT friendly)", async () => {
+      const natDbPath = path.join(tmpDir, "nat_rate_limit_test.sqlite");
+      const natSrv = await startTestServer(natDbPath, { enableRateLimit: true });
+      try {
+        // 30 different students behind one public IP must not block each other.
+        for (let i = 0; i < 30; i++) {
+          const r = await apiRequest(natSrv.baseUrl, "POST", "/api/auth/login", {
+            body: { username: `student_${i}`, password: "wrongpassword" },
+          });
+          assert.equal(r.status, 401, `student_${i} should not be rate limited by others`);
+        }
+
+        // A single account is still protected against brute force.
+        let blocked = false;
+        for (let i = 0; i < 25; i++) {
+          const r = await apiRequest(natSrv.baseUrl, "POST", "/api/auth/login", {
+            body: { username: "student_0", password: "wrongpassword" },
+          });
+          if (r.status === 429) {
+            assert.equal(r.data.code, "RATE_LIMITED");
+            blocked = true;
+            break;
+          }
+        }
+        assert.equal(blocked, true, "Repeated attempts against one username must be limited");
+      } finally {
+        await natSrv.close();
+      }
+    });
+
     console.log(`\nALL ${passedTests} VERIFICATION CHECKS PASSED SUCCESSFULLY!`);
   } finally {
     await srv.close().catch(() => {});

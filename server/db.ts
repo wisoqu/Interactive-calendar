@@ -44,7 +44,7 @@ export function initDatabase(dbFilePath: string, allowLegacyJsonMigration = fals
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       classroom_id TEXT NOT NULL,
-      role TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (classroom_id) REFERENCES classrooms(id) ON DELETE CASCADE
