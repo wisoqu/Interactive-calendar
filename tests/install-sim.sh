@@ -299,8 +299,8 @@ if command -v script >/dev/null 2>&1; then
   check "IP mode: SMTP stays disabled" grep -qx "SMTP_HOST=" "$ENV7"
   check "IP mode: no nginx invocation" test "$(wc -l < "$WORK/nginx.log" 2>/dev/null || echo 0)" = "$NGINX_CALLS_BEFORE"
   check "IP mode: no certbot invocation" test "$(wc -l < "$WORK/certbot.log" 2>/dev/null || echo 0)" = "$CERTBOT_CALLS_BEFORE"
-  check "IP mode: summary explains how to enable HTTPS" grep -q "Включить домен и HTTPS" "$WORK/s7.log"
-  check "IP mode: final address uses HTTP" grep -q "http://203.0.113.10:3000" "$WORK/s7.log"
+  check "IP mode: summary explains how to enable HTTPS" grep -q "Включить домен и HTTPS" "$WORK/s7.pty"
+  check "IP mode: final address uses HTTP" grep -q "http://203.0.113.10:3000" "$WORK/s7.pty"
 else
   echo "  [SKIP] util-linux 'script' not available — IP dialog not tested"
 fi
@@ -357,7 +357,7 @@ if command -v script >/dev/null 2>&1; then
   check "add domain: nginx config written for the new domain" grep -q "server_name calendar2.test;" "$NGINX_CONF8"
   check "add domain: certbot requested as soon as domain was entered" grep -q "certbot --nginx -d calendar2.test" "$WORK/certbot.log"
   check "add domain: certbot got the entered email" grep -q -- "-m admin@calendar2.test" "$WORK/certbot.log"
-  check "add domain: final URL is HTTPS" grep -q "https://calendar2.test" "$WORK/s8.log"
+  check "add domain: final URL is HTTPS" grep -q "https://calendar2.test" "$WORK/s8.pty"
 else
   echo "  [SKIP] util-linux 'script' not available — add-domain dialog not tested"
 fi
@@ -374,9 +374,9 @@ check "apt lock: apt waits for the dpkg lock (DPkg::Lock::Timeout)" \
 check "apt lock: install retried after the lock error" \
   [ "$(grep -c 'install -y -qq nginx certbot python3-certbot-nginx' "$WORK/apt-s9.log")" -eq 3 ]
 check "apt lock: explains unattended-upgrades" \
-  grep -q "Возможно, пакетами занят unattended-upgrades" "$WORK/s9.log"
+  grep -q "Возможно, пакетами занят unattended-upgrades" "$WORK/s9.out"
 check "apt lock: HTTPS completed after the retry" \
-  grep -q "https://calendar.test" "$WORK/s9.log"
+  grep -q "https://calendar.test" "$WORK/s9.out"
 check "apt lock: nginx vhost written" \
   grep -q "server_name calendar.test;" "$WORK/nginx-s9/available/interactive-calendar"
 
@@ -390,21 +390,21 @@ apt_fail_rc=$?
 set -e
 check "apt lock: installer exits non-zero" [ "$apt_fail_rc" -ne 0 ]
 check "apt lock: names unattended-upgrades in the error" \
-  grep -q "unattended-upgrades" "$WORK/s10.log"
+  grep -q "unattended-upgrades" "$WORK/s10.out"
 check "apt lock: says the calendar keeps running" \
-  grep -q "Календарь уже работает" "$WORK/s10.log"
+  grep -q "Календарь уже работает" "$WORK/s10.out"
 check "apt lock: keeps BIND_HOST=0.0.0.0" \
   grep -qx "BIND_HOST=0.0.0.0" "$WORK/app10/.env"
 check "apt lock: does not write an nginx vhost" \
   [ ! -f "$WORK/nginx-s10/available/interactive-calendar" ]
 check "apt lock: does not request a certificate" \
-  bash -c '! grep -q "Запрашиваю сертификат" "$1"' _ "$WORK/s10.log"
+  bash -c '! grep -q "Запрашиваю сертификат" "$1"' _ "$WORK/s10.out"
 check "apt lock: prints the exact retry command" \
-  grep -q "install.sh --domain calendar.test" "$WORK/s10.log"
+  grep -q "install.sh --domain calendar.test" "$WORK/s10.out"
 check "apt lock: retry command includes the email" \
-  grep -q -- "--email admin@calendar.test" "$WORK/s10.log"
+  grep -q -- "--email admin@calendar.test" "$WORK/s10.out"
 check "apt lock: retry command has no angle-bracket placeholders" \
-  bash -c '! grep -q "<email>" "$1"' _ "$WORK/s10.log"
+  bash -c '! grep -q "<email>" "$1"' _ "$WORK/s10.out"
 
 # --- Scenario 11: interrupted dpkg --------------------------------------------
 echo "11. interrupted dpkg: repair with dpkg --configure -a and continue"
@@ -416,18 +416,18 @@ fi
 check "dpkg repair: dpkg --configure -a was executed" \
   grep -q -- "--configure -a" "$WORK/dpkg.log"
 check "dpkg repair: explains the interrupted state" \
-  grep -q "dpkg was interrupted" "$WORK/s11.log"
+  grep -q "dpkg was interrupted" "$WORK/s11.out"
 check "dpkg repair: continues and installs nginx" \
   grep -q "server_name calendar.test;" "$WORK/nginx-s11/available/interactive-calendar"
 check "dpkg repair: HTTPS is configured" \
-  grep -q "https://calendar.test" "$WORK/s11.log"
+  grep -q "https://calendar.test" "$WORK/s11.out"
 check "dpkg repair: apt install retried after the repair" \
   [ "$(grep -c 'install -y -qq nginx' "$WORK/apt-s11.log")" -eq 2 ]
 
 check "printed commands contain no copy-paste-unsafe placeholders" \
   bash -c '! grep -qE -- "--domain <|--email <" "$1"' _ "$REPO_ROOT/install.sh"
 check "IP-only summary contains no angle-bracket placeholders" \
-  bash -c '! grep -qE "<(домен|email|ваш)" "$1"' _ "$WORK/s7.log"
+  bash -c '! grep -qE "<(домен|email|ваш)" "$1"' _ "$WORK/s7.pty"
 
 echo
 if [ "$fail" -eq 0 ]; then
