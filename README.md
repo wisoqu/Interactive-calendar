@@ -109,6 +109,22 @@ bash install.sh --yes --no-swap \
 ```
 Полный список параметров: `bash install.sh --help` (есть `--dir`, `--domain`, `--email`, `--port`, `--ref`, `--no-ssl`, `--no-swap`, `--reconfigure-env`, `--smtp-*`).
 
+### Если apt занят (`Could not get lock ... unattended-upgr`)
+
+Это не связано с DNS и не мешает календарю работать. Сразу после загрузки VPS пакетами занимается `unattended-upgrades`. Установщик передаёт apt `DPkg::Lock::Timeout=300` (ждёт освобождения блокировки до 5 минут) и повторяет установку, поэтому в большинстве случаев достаточно просто дождаться.
+
+Если пакеты так и не установились, установщик оставит календарь работать по IP и покажет команду для повтора. Подождите 1–2 минуты и выполните:
+
+```bash
+bash /opt/interactive-calendar/install.sh --domain <домен> --email <email>
+```
+
+Можно установить пакеты вручную (с ожиданием блокировки) и затем повторить установщик:
+
+```bash
+sudo apt-get -o DPkg::Lock::Timeout=300 install -y nginx certbot python3-certbot-nginx
+```
+
 ### Повторный запуск и обновление
 Повторный запуск установщика обновляет код (`git pull`) и пересобирает контейнер. Существующий `.env` **не перезаписывается** без `--reconfigure-env`, а настройки HTTPS (`BIND_HOST=127.0.0.1`, `TRUST_PROXY=1`) сохраняются:
 ```bash
