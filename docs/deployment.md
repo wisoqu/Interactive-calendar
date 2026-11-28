@@ -102,14 +102,16 @@ On Ubuntu/Debian servers, `install.sh` automates:
 1. Checking available RAM and optionally provisioning a 2 GB `/swapfile` on low-memory VPS instances.
 2. Non-interactively installing `git`, `curl`, `docker`, and the Docker Compose plugin (with retries for temporary `apt` locks).
 3. Cloning or safely updating the repository into `/opt/interactive-calendar` and generating a properly escaped `.env` (mode `600`).
-4. Building and starting the container via Docker Compose, polling `/api/health/db` for up to 90 seconds, and printing container logs on failure.
-5. Optionally validating DNS, installing Nginx + Certbot (`Let's Encrypt`), serving the application over HTTPS on port `443` with `X-Forwarded-Proto`, and switching `BIND_HOST=127.0.0.1` / `TRUST_PROXY=1` so port `3000` is not exposed directly on the public interface.
-6. Verifying the full `Nginx → Node` chain locally (`curl --resolve … https://<domain>/api/health`) and reporting the final URL.
+4. Asking explicitly whether to configure SMTP (`[y/N]`, default **no**) and collecting the mail settings only on request.
+5. Building and starting the container via Docker Compose, polling `/api/health/db` for up to 90 seconds, and printing container logs on failure.
+6. Asking explicitly whether to attach a domain (`[y/N]`, default **no**). On `y`: validating DNS, installing Nginx + Certbot, requesting the `Let's Encrypt` certificate immediately, switching `BIND_HOST=127.0.0.1` / `TRUST_PROXY=1`, and verifying `Nginx → Node` locally (`curl --resolve … https://<domain>/api/health`). Existing HTTPS settings are detected and reused on re-runs.
+
+Prompts are printed to the same stream as the rest of the installer output (and the log), while answers are read from `/dev/tty`, so questions never interleave with Docker build output. Without a TTY the installer requires `--yes`.
 
 ### Interactive and non-interactive usage
 
 ```bash
-# Dialog mode (asks install dir, SMTP, domain, Let's Encrypt email)
+# Dialog mode (install dir, SMTP? [y/N], domain? [y/N], then domain + Let's Encrypt email)
 bash <(curl -Ls https://raw.githubusercontent.com/wisoqu/Interactive-calendar/main/install.sh)
 
 # Fully non-interactive
@@ -175,7 +177,7 @@ Local checks (no server required):
 npm ci
 npm run lint          # strict TypeScript
 npm test              # 26 integration/unit checks
-npm run test:install  # 50 installer checks (no network, mocked docker/nginx/certbot, interactive pty, backup)
+npm run test:install  # 68 installer checks (no network, mocked docker/nginx/certbot, interactive pty, backup)
 npm run check         # all of the above + production build
 ```
 
