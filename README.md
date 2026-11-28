@@ -109,21 +109,23 @@ bash install.sh --yes --no-swap \
 ```
 Полный список параметров: `bash install.sh --help` (есть `--dir`, `--domain`, `--email`, `--port`, `--ref`, `--no-ssl`, `--no-swap`, `--reconfigure-env`, `--smtp-*`).
 
-### Если apt занят (`Could not get lock ... unattended-upgr`)
+### Если apt не может установить пакеты
 
-Это не связано с DNS и не мешает календарю работать. Сразу после загрузки VPS пакетами занимается `unattended-upgrades`. Установщик передаёт apt `DPkg::Lock::Timeout=300` (ждёт освобождения блокировки до 5 минут) и повторяет установку, поэтому в большинстве случаев достаточно просто дождаться.
+Две типовые ситуации на свежем VPS:
 
-Если пакеты так и не установились, установщик оставит календарь работать по IP и покажет команду для повтора. Подождите 1–2 минуты и выполните:
+* `E: Could not get lock /var/lib/dpkg/lock-frontend ... (unattended-upgr)` — пакетами занимается штатное обновление системы. Установщик передаёт apt `DPkg::Lock::Timeout=300` (ждёт до 5 минут) и повторяет установку. Обычно достаточно дождаться.
+* `E: dpkg was interrupted, you must manually run 'dpkg --configure -a'` — предыдущее обновление было прервано (перезагрузка, нехватка памяти, ручное прерывание). Установщик сам определяет эту ошибку, выполняет `dpkg --configure -a` и повторяет установку.
+
+Если автоматически исправить не удалось, выполните вручную и повторите установщик:
 
 ```bash
+sudo DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold --configure -a
+sudo apt-get -f install -y
+sudo apt-get install -y nginx certbot python3-certbot-nginx
 bash /opt/interactive-calendar/install.sh --domain <домен> --email <email>
 ```
 
-Можно установить пакеты вручную (с ожиданием блокировки) и затем повторить установщик:
-
-```bash
-sudo apt-get -o DPkg::Lock::Timeout=300 install -y nginx certbot python3-certbot-nginx
-```
+База данных, `.env` и текущий доступ по IP при этом не затрагиваются. Низкая загрузка CPU в этот момент нормальна: apt/dpkg не работают, а сразу возвращают ошибку — компиляция и сборка контейнера уже завершены.
 
 ### Повторный запуск и обновление
 Повторный запуск установщика обновляет код (`git pull`) и пересобирает контейнер. Существующий `.env` **не перезаписывается** без `--reconfigure-env`, а настройки HTTPS (`BIND_HOST=127.0.0.1`, `TRUST_PROXY=1`) сохраняются:

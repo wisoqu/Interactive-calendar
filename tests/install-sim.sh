@@ -16,7 +16,8 @@
 #   8) безопасно экранирует спецсимволы SMTP-пароля и добавляет домен к уже
 #      установленному IP-инстансу;
 #   9) ждёт освобождения блокировки apt и аккуратно откатывается на IP, если
-#      unattended-upgrades не отпускает её.
+#      unattended-upgrades не отпускает её;
+#  10) исправляет прерванный dpkg (dpkg --configure -a) и продолжает установку.
 #
 # Запуск: bash tests/install-sim.sh   (или npm run test:install)
 set -Eeuo pipefail
@@ -68,6 +69,17 @@ cat > "$BIN/apt-get" <<'EOF'
 #!/usr/bin/env bash
 apt_log="${APT_LOG:-$SIM_LOG/apt.log}"
 echo "apt-get $*" >> "$apt_log"
+# Эмуляция прерванного dpkg: установка не идёт, пока не выполнен --configure -a.
+if [ "${SIM_DPKG_INTERRUPTED:-0}" = "1" ]; then
+  case "$*" in
+    *" install "*nginx*)
+      if [ ! -f "$SIM_LOG/dpkg_configured" ]; then
+        echo "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem." >&2
+        exit 100
+      fi
+      ;;
+  esac
+fi
 # Эмуляция блокировки unattended-upgrades: первые N установок «nginx» падают.
 fail_times="${SIM_APT_FAIL_TIMES:-0}"
 if [ "$fail_times" -gt 0 ]; then
@@ -85,6 +97,15 @@ if [ "$fail_times" -gt 0 ]; then
       ;;
   esac
 fi
+exit 0
+EOF
+
+cat > "$BIN/dpkg" <<'EOF'
+#!/usr/bin/env bash
+echo "dpkg $*" >> "$SIM_LOG/dpkg.log"
+case "$*" in
+  *"--configure"*) touch "$SIM_LOG/dpkg_configured"; exit 0 ;;
+esac
 exit 0
 EOF
 
@@ -378,6 +399,24 @@ check "apt lock: does not request a certificate" \
   bash -c '! grep -q "Запрашиваю сертификат" "$1"' _ "$WORK/s10.log"
 check "apt lock: prints the exact retry command" \
   grep -q "install.sh --domain calendar.test" "$WORK/s10.log"
+
+# --- Scenario 11: interrupted dpkg --------------------------------------------
+echo "11. interrupted dpkg: repair with dpkg --configure -a and continue"
+if ! SIM_DPKG_INTERRUPTED=1 APT_RETRY_DELAY=0 APT_LOG="$WORK/apt-s11.log" \
+  run_installer s11 --yes --no-swap --dir "$WORK/app11" \
+  --domain calendar.test --email admin@calendar.test; then
+  report_installer_failure s11
+fi
+check "dpkg repair: dpkg --configure -a was executed" \
+  grep -q -- "--configure -a" "$WORK/dpkg.log"
+check "dpkg repair: explains the interrupted state" \
+  grep -q "dpkg was interrupted" "$WORK/s11.log"
+check "dpkg repair: continues and installs nginx" \
+  grep -q "server_name calendar.test;" "$WORK/nginx-s11/available/interactive-calendar"
+check "dpkg repair: HTTPS is configured" \
+  grep -q "https://calendar.test" "$WORK/s11.log"
+check "dpkg repair: apt install retried after the repair" \
+  [ "$(grep -c 'install -y -qq nginx' "$WORK/apt-s11.log")" -eq 2 ]
 
 echo
 if [ "$fail" -eq 0 ]; then
