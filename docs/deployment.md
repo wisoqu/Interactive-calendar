@@ -104,7 +104,7 @@ On Ubuntu/Debian servers, `install.sh` automates:
 3. Cloning or safely updating the repository into `/opt/interactive-calendar` and generating a properly escaped `.env` (mode `600`).
 4. Asking explicitly whether to configure SMTP (`[y/N]`, default **no**) and collecting the mail settings only on request.
 5. Building and starting the container via Docker Compose, polling `/api/health/db` for up to 90 seconds, and printing container logs on failure.
-6. Asking explicitly whether to attach a domain (`[y/N]`, default **no**). On `y`: validating DNS, installing Nginx + Certbot (apt is invoked with `DPkg::Lock::Timeout=300` and retried, so a concurrent `unattended-upgrades` run does not abort the installation), requesting the `Let's Encrypt` certificate immediately, switching `BIND_HOST=127.0.0.1` / `TRUST_PROXY=1`, and verifying `Nginx → Node` locally (`curl --resolve … https://<domain>/api/health`). Existing HTTPS settings are detected and reused on re-runs.
+6. Asking explicitly whether to attach a domain (`[y/N]`, default **no**). On `y`: validating DNS, installing Nginx + Certbot (apt is invoked with `DPkg::Lock::Timeout=300` and retried, and an interrupted dpkg journal is repaired with `dpkg --configure -a`, so a concurrent or aborted `unattended-upgrades` run does not abort the installation), requesting the `Let's Encrypt` certificate immediately, switching `BIND_HOST=127.0.0.1` / `TRUST_PROXY=1`, and verifying `Nginx → Node` locally (`curl --resolve … https://<domain>/api/health`). Existing HTTPS settings are detected and reused on re-runs.
 
 Prompts are printed to the same stream as the rest of the installer output (and the log), while answers are read from `/dev/tty`, so questions never interleave with Docker build output. Without a TTY the installer requires `--yes`.
 
@@ -177,7 +177,7 @@ Local checks (no server required):
 npm ci
 npm run lint          # strict TypeScript
 npm test              # 26 integration/unit checks
-npm run test:install  # 80 installer checks (no network, mocked docker/nginx/certbot, interactive pty, backup)
+npm run test:install  # 85 installer checks (no network, mocked docker/nginx/certbot, interactive pty, backup)
 npm run check         # all of the above + production build
 ```
 

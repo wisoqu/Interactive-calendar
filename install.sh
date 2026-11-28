@@ -289,14 +289,43 @@ apt_update() {
   return 1
 }
 
-apt_install() {
-  local attempt delay="$APT_RETRY_DELAY"
+DPKG_REPAIRED=0
+
+# Прерванное обновление (reboot/OOM/ручной Ctrl+C) оставляет dpkg в состоянии
+# «dpkg was interrupted». Лечится ровно одной командой: dpkg --configure -a.
+repair_dpkg() {
+  [ "$DPKG_REPAIRED" = "1" ] && return 0
+  DPKG_REPAIRED=1
+  log_warn "Обнаружена незавершённая операция dpkg (dpkg was interrupted)."
+  log_warn "Исправляю: dpkg --configure -a (обычно занимает меньше минуты)..."
+  local attempt
   for attempt in 1 2 3; do
-    if apt_get install -y -qq "$@"; then
+    if "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive dpkg \
+      --force-confdef --force-confold --configure -a </dev/null; then
+      log_ok "Состояние dpkg исправлено, повторяю установку пакетов."
       return 0
     fi
-    if [ "$attempt" -lt 3 ]; then
-      log_warn "apt-get install не удался (попытка ${attempt}/3)."
+    log_warn "dpkg --configure -a не удался (попытка ${attempt}/3), ждём ${APT_RETRY_DELAY} секунд..."
+    sleep "$APT_RETRY_DELAY"
+  done
+  log_err "Не удалось исправить dpkg автоматически. Выполните вручную: sudo dpkg --configure -a"
+  return 1
+}
+
+apt_install() {
+  local attempt delay="$APT_RETRY_DELAY" output
+  for attempt in 1 2 3 4; do
+    if output="$(apt_get install -y -qq "$@" 2>&1)"; then
+      if [ -n "$output" ]; then printf '%s\n' "$output" >&2; fi
+      return 0
+    fi
+    if [ -n "$output" ]; then printf '%s\n' "$output" >&2; fi
+    if printf '%s' "$output" | grep -qiE "dpkg was interrupted|dpkg --configure -a"; then
+      repair_dpkg || true
+      continue
+    fi
+    if [ "$attempt" -lt 4 ]; then
+      log_warn "apt-get install не удался (попытка ${attempt}/4)."
       log_warn "Возможно, пакетами занят unattended-upgrades — ждём ${delay} секунд..."
       sleep "$delay"
       delay=$(( delay * 2 ))
@@ -843,8 +872,10 @@ if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ] && [ "$HTTPS_ALREADY" != "1" 
   apt_update || true
   if ! apt_install nginx certbot python3-certbot-nginx; then
     log_err "Не удалось установить Nginx/Certbot (пакеты nginx, certbot, python3-certbot-nginx)."
-    log_err "Обычно причина — блокировка /var/lib/dpkg/lock-frontend процессом unattended-upgrades."
+    log_err "Причины: незавершённая операция dpkg или блокировка /var/lib/dpkg/lock-frontend (unattended-upgrades)."
     echo "  Подождите 1–2 минуты и запустите установщик снова — он продолжит с этого места."
+    echo "  Если ошибка повторяется, выполните вручную:"
+    echo "    sudo dpkg --configure -a && sudo apt-get -f install"
     echo "  Календарь уже работает; база данных и HTTPS-настройки не изменены."
     HTTPS_FAILED=1
     FAILED_DOMAIN="$DOMAIN_NAME"
