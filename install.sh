@@ -266,26 +266,41 @@ is_valid_email() {
 }
 
 # apt может быть заблокирован unattended-upgrades сразу после загрузки VPS.
+# DPkg::Lock::Timeout заставляет сам apt ждать освобождения блокировки, а не
+# падать через секунду; повторные попытки страхуют от таймаутов и сетевых сбоев.
+APT_LOCK_TIMEOUT="${APT_LOCK_TIMEOUT:-300}"
+APT_RETRY_DELAY="${APT_RETRY_DELAY:-10}"
+
+apt_get() {
+  "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get \
+    -o "DPkg::Lock::Timeout=${APT_LOCK_TIMEOUT}" \
+    -o "Acquire::Retries=3" "$@"
+}
+
 apt_update() {
   local attempt
   for attempt in 1 2 3; do
-    if "${SUDO[@]}" apt-get update -qq; then
+    if apt_get update -qq; then
       return 0
     fi
-    log_warn "apt-get update не удался (попытка ${attempt}/3), ждём 5 секунд..."
-    sleep 5
+    log_warn "apt-get update не удался (попытка ${attempt}/3), ждём ${APT_RETRY_DELAY} секунд..."
+    sleep "$APT_RETRY_DELAY"
   done
   return 1
 }
 
 apt_install() {
-  local attempt
+  local attempt delay="$APT_RETRY_DELAY"
   for attempt in 1 2 3; do
-    if "${SUDO[@]}" apt-get install -y -qq "$@"; then
+    if apt_get install -y -qq "$@"; then
       return 0
     fi
-    log_warn "apt-get install не удался (попытка ${attempt}/3), ждём 5 секунд..."
-    sleep 5
+    if [ "$attempt" -lt 3 ]; then
+      log_warn "apt-get install не удался (попытка ${attempt}/3)."
+      log_warn "Возможно, пакетами занят unattended-upgrades — ждём ${delay} секунд..."
+      sleep "$delay"
+      delay=$(( delay * 2 ))
+    fi
   done
   return 1
 }
@@ -412,7 +427,7 @@ log_step "[2/6] Проверка системных пакетов (Git, Docker,
 if ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     echo "  Устанавливаем базовые утилиты (git, curl, ca-certificates)..."
-    apt_update
+    apt_update || true
     apt_install git curl ca-certificates
   else
     log_err "Ошибка: установите пакеты git и curl вручную и повторите запуск."
@@ -454,7 +469,7 @@ elif command -v docker-compose >/dev/null 2>&1; then
 else
   if command -v apt-get >/dev/null 2>&1; then
     echo "  Устанавливаем плагин Docker Compose..."
-    apt_update
+    apt_update || true
     if apt_install docker-compose-plugin >/dev/null 2>&1 \
       && "${DOCKER[@]}" docker compose version >/dev/null 2>&1; then
       COMPOSE=("${DOCKER[@]}" docker compose)
@@ -719,6 +734,8 @@ echo ""
 log_step "[6/6] Домен и HTTPS (Let's Encrypt)"
 
 FINAL_URL=""
+HTTPS_FAILED=0
+FAILED_DOMAIN=""
 HTTPS_ALREADY=0
 EXISTING_DOMAIN=""
 NGINX_CONF="${NGINX_SITES_AVAILABLE_DIR}/interactive-calendar"
@@ -822,12 +839,20 @@ fi
 
 if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ] && [ "$HTTPS_ALREADY" != "1" ]; then
   echo "  Устанавливаю Nginx и Certbot..."
-  apt_update
+  echo "  Если apt занят обновлениями (unattended-upgrades), подождём до ${APT_LOCK_TIMEOUT} секунд."
+  apt_update || true
   if ! apt_install nginx certbot python3-certbot-nginx; then
     log_err "Не удалось установить Nginx/Certbot (пакеты nginx, certbot, python3-certbot-nginx)."
-    exit 1
+    log_err "Обычно причина — блокировка /var/lib/dpkg/lock-frontend процессом unattended-upgrades."
+    echo "  Подождите 1–2 минуты и запустите установщик снова — он продолжит с этого места."
+    echo "  Календарь уже работает; база данных и HTTPS-настройки не изменены."
+    HTTPS_FAILED=1
+    FAILED_DOMAIN="$DOMAIN_NAME"
+    DOMAIN_NAME=""
   fi
+fi
 
+if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ] && [ "$HTTPS_ALREADY" != "1" ]; then
   if command -v systemctl >/dev/null 2>&1; then
     "${SUDO[@]}" systemctl enable --now nginx >/dev/null 2>&1 || true
   fi
@@ -971,7 +996,9 @@ fi
 # ------------------------------------------------------------------------------
 echo ""
 log_info "================================================================="
-if [[ "$FINAL_URL" == https://* ]]; then
+if [ "$HTTPS_FAILED" = "1" ]; then
+  log_info "${BOLD}✓ Календарь запущен, но HTTPS не настроен.${NC}"
+elif [[ "$FINAL_URL" == https://* ]]; then
   log_info "${BOLD}✓ Установка успешно завершена!${NC}"
 else
   log_info "${BOLD}✓ Установка завершена — календарь работает!${NC}"
@@ -996,7 +1023,10 @@ if [ -n "$DOMAIN_NAME" ] && [ "$SKIP_SSL" != "1" ]; then
 fi
 echo ""
 if [[ "$FINAL_URL" == http://* ]]; then
-  if [ -n "$DOMAIN_NAME" ] || [ -n "$EXISTING_DOMAIN" ]; then
+  if [ "$HTTPS_FAILED" = "1" ] && [ -n "$FAILED_DOMAIN" ]; then
+    echo "  HTTPS не настроен: не удалось установить Nginx/Certbot."
+    echo -e "  Повторите: ${YELLOW}bash ${INSTALL_DIR}/install.sh --domain ${FAILED_DOMAIN} --email ${CERT_EMAIL:-<email>}${NC}"
+  elif [ -n "$DOMAIN_NAME" ] || [ -n "$EXISTING_DOMAIN" ]; then
     echo "  Домен настроен, но HTTPS-сертификат не выпущен."
     echo -e "  Повторите выпуск: ${YELLOW}sudo certbot --nginx -d ${DOMAIN_NAME:-$EXISTING_DOMAIN}${NC}"
   else
@@ -1005,3 +1035,8 @@ if [[ "$FINAL_URL" == http://* ]]; then
   fi
 fi
 log_info "================================================================="
+
+# Пакеты не установились — сообщаем об этом и кодом возврата, хотя приложение работает.
+if [ "$HTTPS_FAILED" = "1" ]; then
+  exit 1
+fi

@@ -14,7 +14,9 @@
 #   6) оставляет IP-режим при отказе от домена;
 #   7) сохраняет данные при бэкапе;
 #   8) безопасно экранирует спецсимволы SMTP-пароля и добавляет домен к уже
-#      установленному IP-инстансу.
+#      установленному IP-инстансу;
+#   9) ждёт освобождения блокировки apt и аккуратно откатывается на IP, если
+#      unattended-upgrades не отпускает её.
 #
 # Запуск: bash tests/install-sim.sh   (или npm run test:install)
 set -Eeuo pipefail
@@ -64,7 +66,25 @@ EOF
 
 cat > "$BIN/apt-get" <<'EOF'
 #!/usr/bin/env bash
-echo "apt-get $*" >> "$SIM_LOG/apt.log"
+apt_log="${APT_LOG:-$SIM_LOG/apt.log}"
+echo "apt-get $*" >> "$apt_log"
+# Эмуляция блокировки unattended-upgrades: первые N установок «nginx» падают.
+fail_times="${SIM_APT_FAIL_TIMES:-0}"
+if [ "$fail_times" -gt 0 ]; then
+  case "$*" in
+    *"${SIM_APT_FAIL_MATCH:-nginx}"*)
+      count_file="${apt_log}.failures"
+      count=0
+      if [ -f "$count_file" ]; then count="$(cat "$count_file")"; fi
+      if [ "$count" -lt "$fail_times" ]; then
+        echo $((count + 1)) > "$count_file"
+        echo "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 5061 (unattended-upgr)" >&2
+        echo "E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?" >&2
+        exit 100
+      fi
+      ;;
+  esac
+fi
 exit 0
 EOF
 
@@ -318,6 +338,46 @@ if command -v script >/dev/null 2>&1; then
 else
   echo "  [SKIP] util-linux 'script' not available — add-domain dialog not tested"
 fi
+
+# --- Scenario 9: apt lock disappears after a couple of retries ----------------
+echo "9. apt lock: retry until unattended-upgrades releases the lock"
+if ! APT_LOG="$WORK/apt-s9.log" SIM_APT_FAIL_TIMES=2 APT_RETRY_DELAY=0 APT_LOCK_TIMEOUT=30 \
+  run_installer s9 --yes --no-swap --dir "$WORK/app9" \
+  --domain calendar.test --email admin@calendar.test; then
+  report_installer_failure s9
+fi
+check "apt lock: apt waits for the dpkg lock (DPkg::Lock::Timeout)" \
+  grep -q "DPkg::Lock::Timeout=30" "$WORK/apt-s9.log"
+check "apt lock: install retried after the lock error" \
+  [ "$(grep -c 'install -y -qq nginx certbot python3-certbot-nginx' "$WORK/apt-s9.log")" -eq 3 ]
+check "apt lock: explains unattended-upgrades" \
+  grep -q "Возможно, пакетами занят unattended-upgrades" "$WORK/s9.log"
+check "apt lock: HTTPS completed after the retry" \
+  grep -q "https://calendar.test" "$WORK/s9.log"
+check "apt lock: nginx vhost written" \
+  grep -q "server_name calendar.test;" "$WORK/nginx-s9/available/interactive-calendar"
+
+# --- Scenario 10: apt lock never clears --------------------------------------
+echo "10. apt lock: give up gracefully and keep the app on IP"
+set +e
+SIM_APT_FAIL_TIMES=99 APT_RETRY_DELAY=0 APT_LOCK_TIMEOUT=30 \
+  run_installer s10 --yes --no-swap --dir "$WORK/app10" \
+  --domain calendar.test --email admin@calendar.test
+apt_fail_rc=$?
+set -e
+check "apt lock: installer exits non-zero" [ "$apt_fail_rc" -ne 0 ]
+check "apt lock: names unattended-upgrades in the error" \
+  grep -q "unattended-upgrades" "$WORK/s10.log"
+check "apt lock: says the calendar keeps running" \
+  grep -q "Календарь уже работает" "$WORK/s10.log"
+check "apt lock: keeps BIND_HOST=0.0.0.0" \
+  grep -qx "BIND_HOST=0.0.0.0" "$WORK/app10/.env"
+check "apt lock: does not write an nginx vhost" \
+  [ ! -f "$WORK/nginx-s10/available/interactive-calendar" ]
+check "apt lock: does not request a certificate" \
+  bash -c '! grep -q "Запрашиваю сертификат" "$1"' _ "$WORK/s10.log"
+check "apt lock: prints the exact retry command" \
+  grep -q "install.sh --domain calendar.test" "$WORK/s10.log"
 
 echo
 if [ "$fail" -eq 0 ]; then
