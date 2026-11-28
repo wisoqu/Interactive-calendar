@@ -87,6 +87,8 @@
 bash <(curl -Ls https://raw.githubusercontent.com/wisoqu/Interactive-calendar/main/install.sh)
 ```
 
+Эта же команда работает и при повторном запуске: она обновит код из `main` и снова задаст вопросы, не перезаписывая существующие `.env` и базу. Для полностью автоматического обновления добавьте `--yes`.
+
 Установщик задаёт вопросы в диалоговом режиме и сам делает всю настройку:
 
 1. **Проверяет ОЗУ сервера**: если памяти меньше 2 ГБ и нет подкачки, предлагает автоматически создать `SWAP` на 2 ГБ для стабильной сборки на бюджетном VPS.
@@ -235,7 +237,7 @@ bash /opt/interactive-calendar/install.sh --domain calendar.example.ru --email a
    sudo apt-get install -y nginx certbot python3-certbot-nginx
    ```
 2. В файле `/opt/interactive-calendar/.env` установите `BIND_HOST=127.0.0.1` и `TRUST_PROXY=1`, затем перезапустите контейнер (`docker compose up -d`), чтобы закрыть прямой доступ к порту `3000` извне и разрешить приложению доверять заголовку `X-Forwarded-Proto` от Nginx (от него зависят `Secure`-cookie и HSTS).
-3. Создайте файл `/etc/nginx/sites-available/interactive-calendar`:
+3. Создайте файл `/etc/nginx/sites-available/interactive-calendar`. Если на сервере нет IPv6, удалите строку `listen [::]:80;` — иначе `nginx -t` завершится ошибкой (установщик добавляет её автоматически только при наличии IPv6):
    ```nginx
    server {
        listen 80;

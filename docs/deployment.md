@@ -189,7 +189,7 @@ Docker image in CI (`.github/workflows/ci.yml`): builds the production image, ru
 | :--- | :--- |
 | Container exits immediately | `docker compose logs --tail=200`; `df -h`; permissions on `./data` |
 | `502 Bad Gateway` from Nginx | `docker compose ps`; app port vs `proxy_pass` in `/etc/nginx/sites-available/interactive-calendar`; `TRUST_PROXY=1` |
-| Certificate not issued | DNS A record; ports 80/443; no other web server on port 80; `sudo certbot --nginx -d <domain>` |
+| Certificate not issued | DNS A record; ports 80/443; no other web server on port 80; `sudo certbot --nginx -d calendar.example.ru` |
 | `429 RATE_LIMITED` for a whole class | Raise `RATE_LIMIT_*_MAX` in `.env`, then `docker compose up -d` |
 | Password reset emails missing | SMTP credentials (app password), `[SMTP ERROR]` in logs, spam folder |
 | `Secure` cookie missing | HTTPS profile must have `TRUST_PROXY=1` and Nginx must send `X-Forwarded-Proto: https` |
